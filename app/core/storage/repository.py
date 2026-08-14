@@ -152,6 +152,18 @@ class Repository:
         )
         return list(await cursor.fetchall())
 
+    async def list_candidates_limit(self, limit: int = 20) -> list[aiosqlite.Row]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM candidates ORDER BY updated_at DESC LIMIT ?", (limit,)
+        )
+        return list(await cursor.fetchall())
+
+    async def list_signals(self, limit: int = 10) -> list[aiosqlite.Row]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM signals ORDER BY created_at DESC LIMIT ?", (limit,)
+        )
+        return list(await cursor.fetchall())
+
     # -- security_checks ----------------------------------------------------
 
     async def insert_security_check(
@@ -324,6 +336,132 @@ class Repository:
             (limit,),
         )
         return list(await cursor.fetchall())
+
+    async def requeue_failed_outbox(self, now_ms: int) -> int:
+        """明确失败且到达退避时间的消息重新入队（同一 delivery_key 补发）。"""
+        cursor = await self._conn.execute(
+            """UPDATE telegram_outbox SET status = 'PENDING', updated_at = ?
+               WHERE status = 'FAILED' AND next_attempt_at IS NOT NULL
+                 AND next_attempt_at <= ?""",
+            (now_ms, now_ms),
+        )
+        return cursor.rowcount
+
+    async def update_outbox_status(
+        self,
+        delivery_key: str,
+        status: str,
+        *,
+        telegram_message_id: str | None = None,
+        retry_count: int | None = None,
+        next_attempt_at: int | None = None,
+    ) -> None:
+        fields = ["status = ?"]
+        params: list[Any] = [status]
+        if telegram_message_id is not None:
+            fields.append("telegram_message_id = ?")
+            params.append(telegram_message_id)
+        if retry_count is not None:
+            fields.append("retry_count = ?")
+            params.append(retry_count)
+        if next_attempt_at is not None:
+            fields.append("next_attempt_at = ?")
+            params.append(next_attempt_at)
+        fields.append("updated_at = ?")
+        params.append(utc_now_ms())
+        params.append(delivery_key)
+        await self._conn.execute(
+            f"UPDATE telegram_outbox SET {', '.join(fields)} WHERE delivery_key = ?",
+            tuple(params),
+        )
+
+    async def mark_sending_recovery(self) -> int:
+        """恢复：遗留 SENDING 无法证明已发送 → DELIVERY_UNKNOWN。"""
+        cursor = await self._conn.execute(
+            """UPDATE telegram_outbox SET status = 'DELIVERY_UNKNOWN',
+                                        updated_at = ?
+               WHERE status = 'SENDING' RETURNING delivery_key""",
+            (utc_now_ms(),),
+        )
+        rows = await cursor.fetchall()
+        return len(rows)
+
+    # -- telegram_updates 与 offset -----------------------------------------
+
+    async def get_committed_offset(self) -> int:
+        cursor = await self._conn.execute(
+            "SELECT committed_update_id FROM telegram_offset WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+        return int(row["committed_update_id"]) if row else 0
+
+    async def set_committed_offset(self, update_id: int) -> None:
+        cursor = await self._conn.execute(
+            """UPDATE telegram_offset SET committed_update_id = ?
+               WHERE id = 1 AND committed_update_id < ? RETURNING committed_update_id""",
+            (update_id, update_id),
+        )
+        await cursor.fetchone()
+
+    async def insert_update(self, update_id: int, result: dict) -> bool:
+        """update 去重：已存在返回 False。"""
+        cursor = await self._conn.execute(
+            """INSERT OR IGNORE INTO telegram_updates (update_id, processed_at, result)
+               VALUES (?, ?, ?)""",
+            (update_id, utc_now_ms(), json.dumps(result, ensure_ascii=False)),
+        )
+        return cursor.rowcount > 0
+
+    async def get_update(self, update_id: int) -> aiosqlite.Row | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM telegram_updates WHERE update_id = ?", (update_id,)
+        )
+        return await cursor.fetchone()
+
+    # -- telegram_confirmations（一次性确认 nonce） ---------------------------
+
+    async def insert_confirmation(
+        self,
+        *,
+        nonce: str,
+        admin_id: int,
+        chat_id: int,
+        update_id: int,
+        command_hash: str,
+        payload: dict,
+        expires_at: int,
+    ) -> None:
+        await self._conn.execute(
+            """INSERT INTO telegram_confirmations
+               (nonce, admin_id, chat_id, update_id, command_hash, payload,
+                expires_at, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)""",
+            (
+                nonce,
+                admin_id,
+                chat_id,
+                update_id,
+                command_hash,
+                json.dumps(payload, ensure_ascii=False),
+                expires_at,
+                utc_now_ms(),
+            ),
+        )
+
+    async def get_confirmation(self, nonce: str) -> aiosqlite.Row | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM telegram_confirmations WHERE nonce = ?", (nonce,)
+        )
+        return await cursor.fetchone()
+
+    async def consume_confirmation(self, nonce: str, status: str) -> bool:
+        """一次性消费：仅 PENDING 且未过期可消费；同一事务内推进业务。"""
+        cursor = await self._conn.execute(
+            """UPDATE telegram_confirmations SET status = ?, consumed_at = ?
+               WHERE nonce = ? AND status = 'PENDING' AND expires_at >= ?""",
+            (status, utc_now_ms(), nonce, utc_now_ms()),
+        )
+        return cursor.rowcount > 0
 
     # -- api_usage ----------------------------------------------------------
 
