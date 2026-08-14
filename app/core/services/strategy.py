@@ -401,6 +401,9 @@ class SignalPipeline:
     """把 G4-G6 组件串成实时信号闭环（文档第 3.2、4.4 节）。"""
 
     AGGREGATE_WINDOW_MS = 8_000  # 同代币多池聚合窗口
+    MAX_INFLIGHT = 4             # 深查并发上限（GoPlus 30/min 硬约束下防堆积）
+    NEW_POOL_MAX_INFLIGHT = 1    # new_pool 最多占用 1 个并发槽（文档 §4.3 的 90/10 容量）
+    LABEL_PRIORITY = {"hot": 0, "anomaly": 1, "new_pool": 2}
 
     # 阶段计数（诊断：暴露在 /status）
     STAGES = (
@@ -447,15 +450,58 @@ class SignalPipeline:
         self._signal_chat = signal_chat_id  # 信号频道（文档第 8.1 节推送目标）
         self._active = active_snapshot  # (revision, hash)
         self._top_pool_lookup = top_pool_lookup  # (chain, token) -> list[PoolAttributes]
-        self._pending: dict[str, list] = {}
+        self._pending: dict[str, dict] = {}
         self._processing: set[str] = set()
+        self._inflight_priority: dict[str, int] = {}
+        self._new_pool_inflight = 0
+        self._dispatcher: asyncio.Task | None = None
         self.stages: dict[str, int] = {name: 0 for name in self.STAGES}
+
+    def _ensure_dispatcher(self) -> None:
+        if self._dispatcher is None or self._dispatcher.done():
+            self._dispatcher = asyncio.create_task(
+                self._dispatch_loop(), name=f"pipeline-{self.chain}"
+            )
 
     def _bump(self, stage: str) -> None:
         self.stages[stage] = self.stages.get(stage, 0) + 1
 
+    async def _dispatch_loop(self) -> None:
+        """优先级调度：hot > anomaly > new_pool；并发受 MAX_INFLIGHT 与
+        new_pool 容量槽位约束（文档第 4.3 节 90/10 容量规则）。"""
+        try:
+            while True:
+                now = utc_now_ms()
+                due = [
+                    (token, entry)
+                    for token, entry in self._pending.items()
+                    if now >= entry["deadline"]
+                ]
+                if not due:
+                    await asyncio.sleep(0.2)
+                    continue
+                due.sort(key=lambda te: (te[1]["priority"], te[0]))
+                free = self.MAX_INFLIGHT - len(self._processing)
+                for token, entry in due:
+                    if free <= 0:
+                        break
+                    if token in self._processing:
+                        continue
+                    if entry["priority"] == 2 and self._new_pool_inflight >= self.NEW_POOL_MAX_INFLIGHT:
+                        continue
+                    self._pending.pop(token, None)
+                    self._processing.add(token)
+                    self._inflight_priority[token] = entry["priority"]
+                    if entry["priority"] == 2:
+                        self._new_pool_inflight += 1
+                    free -= 1
+                    asyncio.create_task(self._process_token(token, entry["pools"]))
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+
     async def handle_pool(self, pool, label) -> None:
-        """发现回调：按代币聚合多池，聚合窗口后统一处理（文档第 4.4 节）。"""
+        """发现回调：按代币聚合多池，聚合窗口后按优先级统一处理（文档第 4.4 节）。"""
         if self._admin is not None and getattr(self._admin, "paused", False):
             return
         if not (pool.base_token_address and pool.address):
@@ -479,20 +525,29 @@ class SignalPipeline:
                 )
             except Exception:
                 log.exception("候选落库失败 %s", token)
-        self._pending.setdefault(token, []).append(pool)
-        if token not in self._processing:
-            self._processing.add(token)
-            asyncio.create_task(self._process_token(token))
+        entry = self._pending.get(token)
+        if entry is None:
+            entry = {
+                "pools": [],
+                "priority": self.LABEL_PRIORITY.get(label.main if label else "", 2),
+                "deadline": utc_now_ms() + self.AGGREGATE_WINDOW_MS,
+            }
+            self._pending[token] = entry
+            self._ensure_dispatcher()
+        entry["pools"].append(pool)
+        if label and label.main in self.LABEL_PRIORITY:
+            entry["priority"] = min(entry["priority"], self.LABEL_PRIORITY[label.main])
 
-    async def _process_token(self, token: str) -> None:
+    async def _process_token(self, token: str, pools) -> None:
         try:
-            await asyncio.sleep(self.AGGREGATE_WINDOW_MS / 1000)
-            pools = self._pending.pop(token, [])
             await self._process_candidates(token, pools)
         except Exception:
             log.exception("候选处理异常 %s", token)
         finally:
             self._processing.discard(token)
+            priority = self._inflight_priority.pop(token, 2)
+            if priority == 2:
+                self._new_pool_inflight = max(0, self._new_pool_inflight - 1)
 
     async def _process_candidates(self, token: str, pools) -> None:
         # 1. 可信报价过滤 + G1 顶部池映射合并 + 地址去重（文档第 4.4 节）
