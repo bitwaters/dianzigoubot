@@ -337,6 +337,10 @@ class DiscoveryTask:
         self.scheduler = scheduler
         self.on_pool: Optional[Callable[[PoolAttributes, PoolLabel, MegafilterTemplate], Awaitable[None]]] = None
 
+    async def fetch_template(self, template: MegafilterTemplate) -> list[PoolAttributes]:
+        """按模板执行一次采集（run 与 collection dry-run 共用）。"""
+        return await self._fetch(template)
+
     async def run(self) -> int:
         """执行所有到期模板，返回本次新发现候选数。"""
         now = utc_now_ms()
@@ -388,6 +392,30 @@ class DiscoveryTask:
             page = int(query.pop("page", 1))
             return await self.cg.new_pools(network, page=page, include=query.get("include", ""))
         raise ValueError(f"未知模板端点: {template.endpoint}")
+
+
+async def collection_dry_run(
+    chain: str, strategy: ChainStrategy, cg: CoinGeckoClient
+) -> dict:
+    """validate-collection dry-run（第 10.6 节）：只执行模板请求，不深查/信号/事件。"""
+    task = DiscoveryTask(chain, strategy, cg, TemplateScheduler(chain, strategy.collection, None))  # type: ignore[arg-type]
+    report: dict[str, Any] = {"chain": chain, "templates": {}}
+    for template in strategy.collection.query_templates:
+        started = asyncio.get_event_loop().time()
+        try:
+            pools = await task.fetch_template(template)
+            report["templates"][template.id] = {
+                "ok": True,
+                "count": len(pools),
+                "latency_seconds": round(asyncio.get_event_loop().time() - started, 2),
+            }
+        except Exception as exc:
+            report["templates"][template.id] = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "latency_seconds": round(asyncio.get_event_loop().time() - started, 2),
+            }
+    return report
 
 
 async def _persist_security(

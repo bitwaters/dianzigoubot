@@ -435,6 +435,16 @@ class SignalsConfig(StrictModel):
     max_participant_age_seconds: int = Field(gt=0)
 
 
+class TakeProfitLeg(StrictModel):
+    leg_index: int = Field(ge=1)
+    trigger_profit_pct: Annotated[
+        DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100)))
+    ]
+    sell_pct_of_initial: Annotated[
+        DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100)))
+    ]
+
+
 class BacktestModelConfig(StrictModel):
     base_slippage_bps: Annotated[DecimalStr, AfterValidator(_non_negative)]
     max_impact_bps: Annotated[DecimalStr, AfterValidator(_non_negative)]
@@ -445,6 +455,30 @@ class BacktestModelConfig(StrictModel):
         DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100), inclusive=False))
     ]
     fill_deadline_seconds: int = Field(ge=180)
+    take_profit_legs: list[TakeProfitLeg] = Field(default_factory=list)
+    stop_loss_pct: Annotated[
+        DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100), inclusive=False))
+    ]
+    trailing_stop_pct: Annotated[
+        DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100), inclusive=False))
+    ]
+    trailing_activation_profit_pct: Annotated[
+        DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100), inclusive=False))
+    ]
+    max_hold_seconds: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _legs_order_and_sum(self) -> "BacktestModelConfig":
+        legs = sorted(self.take_profit_legs, key=lambda x: x.leg_index)
+        if [x.leg_index for x in legs] != list(range(1, len(legs) + 1)):
+            raise ValueError("take_profit_legs 的 leg_index 必须从 1 连续递增")
+        for prev, cur in zip(legs, legs[1:]):
+            if not cur.trigger_profit_pct > prev.trigger_profit_pct:
+                raise ValueError("take_profit_legs 触发涨幅必须按档位严格递增")
+        total = sum((x.sell_pct_of_initial for x in legs), Decimal(0))
+        if total > 100:
+            raise ValueError("take_profit_legs 卖出比例总和不得超过 100")
+        return self
 
 
 class ChainStrategy(StrictModel):

@@ -15,6 +15,10 @@ class Repository:
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
 
+    @property
+    def conn(self) -> aiosqlite.Connection:
+        return self._conn
+
     # -- tokens / pools -----------------------------------------------------
 
     async def upsert_token(

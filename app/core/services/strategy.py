@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal, Optional
 
+from app.core.models import canonical_json, utc_now_ms
+
 log = logging.getLogger(__name__)
 
 FEATURE_DECIMALS = Decimal("0.00000001")  # 保留 8 位小数
@@ -21,6 +23,8 @@ class CandleBar:
     low: Decimal
     close: Decimal
     volume: Decimal
+    open_ts_ms: int | None = None  # 回测 1m 模型需要；实时窗口聚合可不填
+    synthetic: bool = False        # 回测合成延续条，不触发成交
 
 
 @dataclass
@@ -385,6 +389,127 @@ def evaluate_candidate(
 
     return CandidateDecision(new, reason="keep")
 
+
+# ---------------------------------------------------------------------------
+# 10.6 策略激活与回退（手动决策）
+# ---------------------------------------------------------------------------
+
+import uuid as _uuid2  # noqa: E402
+
+
+class StrategyActivationService:
+    def __init__(self, repo) -> None:
+        self._repo = repo
+
+    async def current_active(self) -> dict | None:
+        cursor = await self._repo.conn.execute(
+            "SELECT * FROM strategy_snapshots WHERE is_active = 1"
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    async def activate(
+        self, strategy, *, admin_id: int, change_reason_override: str | None = None
+    ) -> str:
+        """手动激活（第 10.6 节）：revision 不复用、parent 指向当前 ACTIVE。"""
+        current = await self.current_active()
+        if current is not None and strategy.revision == current["revision"]:
+            raise ValueError(f"revision 已使用: {strategy.revision}")
+        if strategy.parent_revision is None and current is not None:
+            raise ValueError("parent_revision 必须等于当前 ACTIVE 的 revision")
+        if current is not None and strategy.parent_revision != current["revision"]:
+            raise ValueError(
+                f"parent_revision={strategy.parent_revision} 与当前 ACTIVE "
+                f"{current['revision']} 不一致"
+            )
+        activation_id = _uuid2.uuid4().hex
+        canonical = canonical_json(strategy.model_dump(mode="json", by_alias=True))
+        await self._repo.conn.execute("BEGIN")
+        try:
+            await self._repo.conn.execute(
+                "UPDATE strategy_snapshots SET is_active = 0, activated_at = NULL"
+            )
+            await self._repo.conn.execute(
+                """INSERT INTO strategy_snapshots
+                   (revision, parent_revision, strategy_hash, canonical,
+                    change_reason, is_active, activated_at)
+                   VALUES (?, ?, ?, ?, ?, 1, ?)""",
+                (
+                    strategy.revision,
+                    strategy.parent_revision,
+                    strategy.strategy_hash,
+                    canonical,
+                    change_reason_override or strategy.change_reason,
+                    utc_now_ms(),
+                ),
+            )
+            await self._repo.conn.execute(
+                """INSERT INTO strategy_activations
+                   (activation_id, kind, before_revision, after_revision,
+                    before_hash, after_hash, admin_id, created_at)
+                   VALUES (?, 'ACTIVATE', ?, ?, ?, ?, ?, ?)""",
+                (
+                    activation_id,
+                    current["revision"] if current else None,
+                    strategy.revision,
+                    current["strategy_hash"] if current else None,
+                    strategy.strategy_hash,
+                    admin_id,
+                    utc_now_ms(),
+                ),
+            )
+            await self._repo.conn.commit()
+        except Exception:
+            await self._repo.conn.rollback()
+            raise
+        return activation_id
+
+    async def rollback(self, revision: str, *, admin_id: int) -> str:
+        """回退：重新激活历史快照原 revision/hash，不伪造新 revision。"""
+        cursor = await self._repo.conn.execute(
+            "SELECT * FROM strategy_snapshots WHERE revision = ?", (revision,)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise ValueError(f"历史快照不存在: {revision}")
+        current = await self.current_active()
+        if current is None:
+            raise ValueError("无 ACTIVE 快照")
+        if current["revision"] == revision:
+            raise ValueError("目标 revision 已是 ACTIVE")
+        activation_id = _uuid2.uuid4().hex
+        await self._repo.conn.execute("BEGIN")
+        try:
+            await self._repo.conn.execute(
+                "UPDATE strategy_snapshots SET is_active = 0, activated_at = NULL"
+            )
+            await self._repo.conn.execute(
+                "UPDATE strategy_snapshots SET is_active = 1, activated_at = ? "
+                "WHERE revision = ?",
+                (utc_now_ms(), revision),
+            )
+            await self._repo.conn.execute(
+                """INSERT INTO strategy_activations
+                   (activation_id, kind, before_revision, after_revision,
+                    before_hash, after_hash, admin_id, created_at)
+                   VALUES (?, 'ROLLBACK', ?, ?, ?, ?, ?, ?)""",
+                (
+                    activation_id,
+                    current["revision"],
+                    revision,
+                    current["strategy_hash"],
+                    row["strategy_hash"],
+                    admin_id,
+                    utc_now_ms(),
+                ),
+            )
+            await self._repo.conn.commit()
+        except Exception:
+            await self._repo.conn.rollback()
+            raise
+        return activation_id
 
 # ---------------------------------------------------------------------------
 # 6.5/7.2 信号创建（决策快照 + 落库）

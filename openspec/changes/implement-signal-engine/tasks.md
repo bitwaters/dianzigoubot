@@ -62,9 +62,9 @@
 
 ### 9. 结果追踪与用量控制
 
-- [ ] 9.1 结果标签追踪：15m/1h/6h/24h 定点 Multiple Pools 快照 + 补洞一次 + 缺口记录
-- [ ] 9.2 spike：`simple token_price` 契约验证报告，通过后切换结果追踪数据源
-- [ ] 9.3 REST 全局并发上限（`rest_concurrency_max`）与关键事务优先
+- [x] 9.1 结果标签追踪：15m/1h/6h/24h 定点 Multiple Pools 快照 + 补洞一次 + 缺口记录
+- [x] 9.2 spike：`simple token_price` 契约验证报告，通过后切换结果追踪数据源
+- [x] 9.3 REST 全局并发上限（`rest_concurrency_max`）与关键事务优先
 
 ### 10. 回测与策略激活
 

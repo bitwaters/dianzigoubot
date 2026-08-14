@@ -694,6 +694,10 @@ BSC 必须配置：
 - `backtest_model.base_slippage_bps/max_impact_bps/impact_coefficient`
 - `backtest_model.network_fee_native/min_fill_liquidity_usd`
 - `backtest_model.fill_deviation_pct_max/fill_deadline_seconds`，其中 `fill_deadline_seconds >= 180`
+- `backtest_model.take_profit_legs[]`：`leg_index/trigger_profit_pct/sell_pct_of_initial`，按 `leg_index` 与触发涨幅严格递增，`sell_pct_of_initial` 总和不得超过 100
+- `backtest_model.stop_loss_pct`
+- `backtest_model.trailing_stop_pct/trailing_activation_profit_pct`
+- `backtest_model.max_hold_seconds`
 
 实盘与模拟执行的滑点、费用、止盈止损与仓位风险参数由交易插件自持，见交易插件文档；核心策略不包含这些字段，回测与实盘参数独立配置、互不依赖。
 
