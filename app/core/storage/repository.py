@@ -288,6 +288,43 @@ class Repository:
             "DELETE FROM discovery_schedule WHERE chain = ?", (chain,)
         )
 
+    # -- telegram_outbox（核心统一投递，总控文档第 8.3 节） -----------------
+
+    async def insert_outbox(
+        self,
+        *,
+        delivery_key: str,
+        kind: str,
+        parent_id: str | None,
+        chat_target: str,
+        text: str,
+        priority: int = 0,
+        now_ms: int | None = None,
+    ) -> None:
+        now = now_ms or utc_now_ms()
+        await self._conn.execute(
+            """INSERT INTO telegram_outbox (delivery_key, kind, parent_id,
+                                            chat_target, text, status,
+                                            retry_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)""",
+            (delivery_key, kind, parent_id, chat_target, text, now, now),
+        )
+
+    async def get_outbox(self, delivery_key: str) -> aiosqlite.Row | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM telegram_outbox WHERE delivery_key = ?", (delivery_key,)
+        )
+        return await cursor.fetchone()
+
+    async def list_outbox_pending(self, limit: int = 50) -> list[aiosqlite.Row]:
+        cursor = await self._conn.execute(
+            """SELECT * FROM telegram_outbox
+               WHERE status IN ('PENDING', 'SENDING')
+               ORDER BY created_at LIMIT ?""",
+            (limit,),
+        )
+        return list(await cursor.fetchall())
+
     # -- api_usage ----------------------------------------------------------
 
     async def record_api_usage(

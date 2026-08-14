@@ -40,11 +40,11 @@
 
 ### 6. 评分、防追高与信号
 
-- [ ] 6.1 评分纯函数库：全部派生特征公式（文档第 6.5 节）、权重/缺失动作/方向校验
-- [ ] 6.2 聪明钱 v1：Top Traders + Pool Trades 取证、TOKEN_PROFITABLE 分类与卖出阻挡（LOCAL_SMART 权重固定 `"0"`）
-- [ ] 6.3 防追高状态机（垂直上涨/VWAP 偏离、高位整理、回踩恢复，文档第 6.6 节）
-- [ ] 6.4 候选状态机（WATCHING/SETUP/SIGNAL/REJECTED/EXPIRED）与 `signal_generation` 去重/重新武装
-- [ ] 6.5 信号落库（决策快照完整特征向量）、`signal_created`/`signal_invalidated` 事件（Schema v1，文档第 15.2 节）；落库前执行 GoPlus PRE_EXECUTION_CHECK（120 秒快照）
+- [x] 6.1 评分纯函数库：全部派生特征公式（文档第 6.5 节）、权重/缺失动作/方向校验
+- [x] 6.2 聪明钱 v1：Top Traders + Pool Trades 取证、TOKEN_PROFITABLE 分类与卖出阻挡（LOCAL_SMART 权重固定 `"0"`）
+- [x] 6.3 防追高状态机（垂直上涨/VWAP 偏离、高位整理、回踩恢复，文档第 6.6 节）
+- [x] 6.4 候选状态机（WATCHING/SETUP/SIGNAL/REJECTED/EXPIRED）与 `signal_generation` 去重/重新武装
+- [x] 6.5 信号落库（决策快照完整特征向量）、`signal_created`/`signal_invalidated` 事件（Schema v1，文档第 15.2 节）；落库前执行 GoPlus PRE_EXECUTION_CHECK（120 秒快照）
 
 ### 7. 插件总线（SDK 规范第 2-7 章行为的核心侧实现）
 
