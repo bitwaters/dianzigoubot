@@ -20,7 +20,7 @@ from app.core.clients.coingecko import (
     TokenInfo,
     TopHolders,
 )
-from app.core.clients.goplus import EvmSecurity, GoPlusClient, SolSecurity
+from app.core.clients.goplus import EvmSecurity, GoPlusClient, GoPlusRateLimited, SolSecurity
 from app.core.config import ChainStrategy, MegafilterTemplate
 from app.core.models import utc_now_ms
 from app.core.services.security import (
@@ -321,6 +321,19 @@ class CandidatePipeline:
                     main_pool_address=main_pool_address,
                     coin_holders=holders,
                 )
+        except GoPlusRateLimited:
+            # 业务限流：等待一个令牌周期后重试一次
+            await asyncio.sleep(3)
+            try:
+                return await self._security_check(
+                    token_address,
+                    token_info,
+                    holders,
+                    kind=kind,
+                    main_pool_address=main_pool_address,
+                )
+            except Exception:
+                return None
         except Exception as exc:
             log.warning("GoPlus 检查失败 %s %s: %s", self.chain, token_address, exc)
             return None

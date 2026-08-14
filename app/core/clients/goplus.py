@@ -78,11 +78,13 @@ def _flag(value: Any) -> str | None:
 
 
 class TokenBucket:
-    """简单 token bucket：全局 30 次/分钟。"""
+    """简单 token bucket：全局 30 次/分钟，初始不突发（生产 4029 教训）。"""
 
-    def __init__(self, rate: int = RATE_LIMIT_PER_MINUTE) -> None:
+    def __init__(
+        self, rate: int = RATE_LIMIT_PER_MINUTE, initial: float = 0.0
+    ) -> None:
         self._rate = rate
-        self._tokens = float(rate)
+        self._tokens = initial
         self._updated = time.monotonic()
         self._lock = asyncio.Lock()
 
@@ -522,7 +524,10 @@ class GoPlusClient:
             body = response.json()
         except ValueError as exc:
             raise GoPlusContractError(f"{path} 响应非 JSON") from exc
-        if body.get("code") != 1:
+        code = body.get("code")
+        if code == 4029:
+            raise GoPlusRateLimited(f"{path} 业务限流 (4029)")
+        if code != 1:
             raise GoPlusContractError(
                 f"{path} 业务失败 code={body.get('code')} message={body.get('message')}"
             )
