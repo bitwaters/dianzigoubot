@@ -673,7 +673,7 @@ Schema 强制正向特征 `good > bad`，反向特征 `good < bad`，禁止相�
 
 Solana 必须配置：
 
-- CoinGecko GT Score 最低值固定为 `75`
+- CoinGecko GT Score 最低值可配置（0-100，本版基线 `40`）
 - Top 10、developer holding 上限；holder count 不得作为硬门禁
 - GoPlus transfer fee 上限、LP locked 下限
 - `allowed_pool_models` 固定包含 `LP_TOKEN_OR_BURN_VERIFIABLE`
@@ -681,7 +681,7 @@ Solana 必须配置：
 
 BSC 必须配置：
 
-- CoinGecko GT Score 最低值固定为 `75`
+- CoinGecko GT Score 最低值可配置（0-100，本版基线 `40`）
 - Top 10 上限；holder count 不得作为硬门禁
 - buy/sell/transfer tax 上限
 - creator/owner holding 上限、LP locked 下限

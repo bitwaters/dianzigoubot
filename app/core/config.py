@@ -304,7 +304,7 @@ class MarketQualityConfig(StrictModel):
 
 
 class SolanaSecurityConfig(StrictModel):
-    gt_score_min: Literal[75] = 75
+    gt_score_min: int = Field(ge=0, le=100)
     top10_holding_pct_max: Annotated[DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100)))]
     developer_holding_pct_max: Annotated[DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100)))]
     transfer_fee_bps_max: Annotated[DecimalStr, AfterValidator(_non_negative)]
@@ -327,7 +327,7 @@ class SolanaSecurityConfig(StrictModel):
 
 
 class BscSecurityConfig(StrictModel):
-    gt_score_min: Literal[75] = 75
+    gt_score_min: int = Field(ge=0, le=100)
     top10_holding_pct_max: Annotated[DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100)))]
     creator_owner_holding_pct_max: Annotated[DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100)))]
     buy_tax_pct_max: Annotated[DecimalStr, AfterValidator(_within(Decimal(0), Decimal(100)))]

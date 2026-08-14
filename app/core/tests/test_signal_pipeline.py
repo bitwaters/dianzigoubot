@@ -168,13 +168,17 @@ def db_path(tmp_path):
 async def _feed_bars(buffer: G3CandleBuffer, pool: str, n: int = 12) -> None:
     from app.core.clients.coingecko_ws import Candle
 
-    now = int(__import__("time").time() * 1000)
+    latest = buffer.final_bars(pool, "base")
+    if latest:
+        start = max(b.open_ts_ms for b in latest) + 1000  # 从最后一根继续，保证连续性
+    else:
+        start = int(__import__("time").time() * 1000) - n * 1000
     for i in range(n):
         buffer.upsert(
             pool,
             "base",
             Candle(
-                open_ts_ms=now - (n - i) * 1000,
+                open_ts_ms=start + i * 1000,
                 open=Decimal("1.0"),
                 high=Decimal("1.01"),
                 low=Decimal("0.99"),

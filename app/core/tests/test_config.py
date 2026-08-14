@@ -57,9 +57,9 @@ class TestLogging:
 class TestStrategyValid:
     def test_valid_fixture_loads(self):
         strategy = load_strategy_file(FIXTURES / "strategy_valid.yaml")
-        assert strategy.revision == "strategy-2"
-        assert strategy.parent_revision == "strategy-1"
-        assert strategy.solana.security.gt_score_min == 75
+        assert strategy.revision == "strategy-3"
+        assert strategy.parent_revision == "strategy-2"
+        assert strategy.solana.security.gt_score_min == 40
         assert isinstance(strategy.bsc.security.allowed_pool_models, list)
         assert len(strategy.strategy_hash) == 64
 
@@ -119,9 +119,15 @@ class TestStrategyRejections:
         with pytest.raises(ValidationError, match="四个入口"):
             StrategyFile.model_validate(raw)
 
-    def test_gt_score_fixed(self):
+    def test_gt_score_bounds(self):
         raw = _load_valid()
-        raw["solana"]["security"]["gt_score_min"] = 60
+        raw["solana"]["security"]["gt_score_min"] = 60  # 可配置（0-100）
+        StrategyFile.model_validate(raw)
+        raw["solana"]["security"]["gt_score_min"] = 150
+        with pytest.raises(ValidationError):
+            StrategyFile.model_validate(raw)
+        raw = _load_valid()
+        raw["solana"]["security"]["gt_score_min"] = -1
         with pytest.raises(ValidationError):
             StrategyFile.model_validate(raw)
 

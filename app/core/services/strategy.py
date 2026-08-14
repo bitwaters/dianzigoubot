@@ -400,8 +400,8 @@ def evaluate_candidate(
 class SignalPipeline:
     """把 G4-G6 组件串成实时信号闭环（文档第 3.2、4.4 节）。"""
 
-    AGGREGATE_WINDOW_MS = 8_000  # 同代币多池聚合窗口
-    MAX_INFLIGHT = 4             # 深查并发上限（GoPlus 30/min 硬约束下防堆积）
+    AGGREGATE_WINDOW_MS = 5_000  # 同代币多池聚合窗口
+    MAX_INFLIGHT = 12            # 深查并发上限（GoPlus 有鉴权后不再限流）（GoPlus 30/min 硬约束下防堆积）
     NEW_POOL_MAX_INFLIGHT = 1    # new_pool 最多占用 1 个并发槽（文档 §4.3 的 90/10 容量）
     LABEL_PRIORITY = {"hot": 0, "anomaly": 1, "new_pool": 2}
 
