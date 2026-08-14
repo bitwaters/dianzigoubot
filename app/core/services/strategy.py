@@ -402,6 +402,19 @@ class SignalPipeline:
 
     AGGREGATE_WINDOW_MS = 8_000  # 同代币多池聚合窗口
 
+    # 阶段计数（诊断：暴露在 /status）
+    STAGES = (
+        "seen",
+        "trusted_quote_fail",
+        "security_fail",
+        "g3_incomplete",
+        "score_below_setup",
+        "anti_chase_block",
+        "setup_waiting",
+        "pre_exec_fail",
+        "signaled",
+    )
+
     def __init__(
         self,
         *,
@@ -434,6 +447,10 @@ class SignalPipeline:
         self._top_pool_lookup = top_pool_lookup  # (chain, token) -> list[PoolAttributes]
         self._pending: dict[str, list] = {}
         self._processing: set[str] = set()
+        self.stages: dict[str, int] = {name: 0 for name in self.STAGES}
+
+    def _bump(self, stage: str) -> None:
+        self.stages[stage] = self.stages.get(stage, 0) + 1
 
     async def handle_pool(self, pool, label) -> None:
         """发现回调：按代币聚合多池，聚合窗口后统一处理（文档第 4.4 节）。"""
@@ -442,6 +459,7 @@ class SignalPipeline:
         if not (pool.base_token_address and pool.address):
             return
         token = pool.base_token_address
+        self._bump("seen")
         # 候选在发现准入时即落库（WATCHING + 标签），管线只更新状态（文档第 7.1 节）
         if label is not None:
             try:
@@ -489,6 +507,7 @@ class SignalPipeline:
                 if self._trusted_quote(pool):
                     candidates.setdefault(pool.address, pool)
         if not candidates:
+            self._bump("trusted_quote_fail")
             return  # 文档第 4.4 节：无可信报价资产池仅观察
         addresses = list(candidates)
 
@@ -497,6 +516,7 @@ class SignalPipeline:
         if result.errors.get("token_info"):
             return
         if result.security is None or not result.security.passed:
+            self._bump("security_fail")
             return
 
         # 3. 并行 G3 FOCUS：全部准入池（每个精确池独立占订阅与计费）
@@ -511,6 +531,9 @@ class SignalPipeline:
                     if window is not None:
                         windows.setdefault(addr, window)
                 await asyncio.sleep(0.25)
+            if not windows:
+                self._bump("g3_incomplete")
+                return  # INCOMPLETE：全部池缺秒或不足 10 根
 
             # 4. 两份快照本地接收时间相隔至少 10 秒（文档第 4.4 节）
             if result.first_snapshot_at_ms is not None:
@@ -567,6 +590,7 @@ class SignalPipeline:
                     if anti.allowed:
                         break
             if not anti.allowed:
+                self._bump("anti_chase_block")
                 return
 
             # 8. 候选状态机 + 信号
@@ -584,6 +608,10 @@ class SignalPipeline:
             )
             await self._save_state(token, pool_address, decision.state)
             if not decision.emit_signal:
+                if scoring.total_score < self.strategy.scoring.setup_score_min:
+                    self._bump("score_below_setup")
+                else:
+                    self._bump("setup_waiting")
                 return
 
             # PRE_EXECUTION_CHECK（120 秒快照；主池随检查传递，Top10 排除 LP 池）
@@ -595,6 +623,7 @@ class SignalPipeline:
                 main_pool_address=pool_address,
             )
             if pre_exec is None or not pre_exec.passed:
+                self._bump("pre_exec_fail")
                 return
             signal_id = await create_signal(
                 self._repo,
@@ -615,6 +644,7 @@ class SignalPipeline:
                 validity_seconds=self.strategy.signals.validity_seconds,
                 now_ms=utc_now_ms(),
             )
+            self._bump("signaled")
             await self._bus.publish_signal_created(signal_id)
             # Telegram 买入信号推送到信号频道（文档第 8.1 节）
             row = await self._repo.get_signal(signal_id)

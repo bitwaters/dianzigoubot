@@ -156,7 +156,7 @@ async def main() -> None:
     admin.register("/telegram", core.telegram_command)
 
     async def status_provider() -> str:
-        """/status 补充运行活动数据（候选/信号/投递/WS 状态）。"""
+        """/status 补充运行活动数据（候选/信号/投递/WS 状态/管线阶段计数）。"""
         lines = []
         for table in ("candidates", "signals"):
             cursor = await repo.conn.execute(f"SELECT COUNT(*) FROM {table}")
@@ -169,6 +169,12 @@ async def main() -> None:
         lines.append(f"outbox 未终态: {int(row[0])}")
         for chain in ("solana", "bsc"):
             lines.append(f"ws[{chain}]: {ws_clients[chain].state}")
+        for chain in ("solana", "bsc"):
+            stages = pipelines[chain].stages
+            lines.append(
+                f"pipeline[{chain}]: "
+                + " ".join(f"{k}={v}" for k, v in stages.items())
+            )
         return "\n".join(lines)
 
     admin.set_status_provider(status_provider)
