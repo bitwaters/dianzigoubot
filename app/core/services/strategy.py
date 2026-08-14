@@ -463,8 +463,8 @@ class SignalPipeline:
 
     @property
     def strategy(self):
-        """热替换支持：每次取当前 ACTIVE（文档第 10.6 节）。"""
-        return self._strategy_holder.get()
+        """热替换支持：每次取当前 ACTIVE 的对应链策略（文档第 10.6 节）。"""
+        return getattr(self._strategy_holder.get(), self.chain)
 
     def _ensure_dispatcher(self) -> None:
         if self._dispatcher is None or self._dispatcher.done():

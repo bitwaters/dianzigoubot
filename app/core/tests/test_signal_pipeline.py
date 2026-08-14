@@ -205,9 +205,10 @@ class TestSignalPipelineE2E:
         signals = STRATEGY.solana.signals.model_copy(
             update={"setup_confirmation_seconds": 1}
         )
-        return STRATEGY.solana.model_copy(
+        chain = STRATEGY.solana.model_copy(
             update={"scoring": scoring, "signals": signals}
         )
+        return STRATEGY.model_copy(update={"solana": chain})
 
     async def test_multi_pool_barrier_signal(self, db_path):
         db = Database(db_path)
@@ -284,7 +285,7 @@ class TestSignalPipelineE2E:
         buffer = G3CandleBuffer()
         bus = FakeBus()
 
-        holder = StrategyHolder(STRATEGY.solana)
+        holder = StrategyHolder(STRATEGY)
         pipeline = SignalPipeline(
             chain="solana",
             strategy_holder=holder,
