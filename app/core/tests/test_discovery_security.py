@@ -165,6 +165,29 @@ class TestSecuritySolana:
         )
         return raw
 
+    def test_values_populated(self):
+        from app.core.clients.coingecko import TokenInfo
+        from app.core.clients.goplus import parse_solana
+
+        goplus_raw = self._load("goplus_solana_raw")
+        goplus = parse_solana(next(iter(goplus_raw["result"])), next(iter(goplus_raw["result"].values())))
+        token_info = TokenInfo(
+            address="T", gt_score=Decimal("90"), developer_holding_percentage=Decimal("3")
+        )
+        from app.core.clients.coingecko import TopHolders
+
+        result = evaluate_solana(
+            token_info=token_info,
+            goplus=goplus,
+            security_cfg=STRATEGY.solana.security,
+            main_pool_address="POOL1",
+            coin_holders=TopHolders(holders=[]),
+        )
+        # 结构化数值传递（修复 detail 字符串解析问题）
+        assert "top10_holding_pct" in result.values
+        assert "lp_locked_pct" in result.values
+        assert result.values["developer_or_creator_holding_pct"] == Decimal("3")
+
     def test_evaluate_with_real_fixture(self):
         from app.core.clients.coingecko import TokenInfoBuilder, TopHolders
         from app.core.clients.goplus import parse_solana

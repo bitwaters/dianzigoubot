@@ -61,14 +61,16 @@ class UpdatePoller:
                     new = await self._repo.insert_update(update_id, {"handled": "pending"})
                     if not new:
                         continue  # 重复 update：只返回已保存结果，不重复执行
+                    result: dict[str, Any] = {"handled": "ok"}
                     try:
-                        result: dict[str, Any] = {}
                         if self.on_update is not None:
                             await self.on_update(update)
-                        result = {"handled": "ok"}
+                    except Exception as exc:
+                        result = {"handled": "error", "error": str(exc)}
+                        log.warning("update 处理异常 %s: %s", update_id, exc)
                     finally:
-                        await self._repo.insert_update(update_id, result)
-                        # 业务事务提交后推进 offset（更新 upsert 覆盖同 update_id）
+                        await self._repo.update_update_result(update_id, result)
+                        # 业务事务提交后推进 offset
                         await self._repo.set_committed_offset(update_id + 1)
                         offset = update_id + 1
             except asyncio.CancelledError:

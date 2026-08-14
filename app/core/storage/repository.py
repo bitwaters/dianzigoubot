@@ -283,6 +283,25 @@ class Repository:
             (invalidated_at or utc_now_ms(), reason, signal_id),
         )
 
+    async def list_expired_signals(self, now_ms: int, limit: int = 100) -> list[aiosqlite.Row]:
+        """已过期且未作废的信号（供过期扫描发布 signal_invalidated）。"""
+        cursor = await self._conn.execute(
+            """SELECT * FROM signals
+               WHERE invalidated_at IS NULL AND expires_at <= ?
+               ORDER BY created_at LIMIT ?""",
+            (now_ms, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def sum_ws_charged_since(self, since_ms: int) -> int:
+        cursor = await self._conn.execute(
+            """SELECT COALESCE(SUM(charged_responses), 0) FROM api_usage
+               WHERE kind = 'WS' AND created_at >= ?""",
+            (since_ms,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0])
+
     async def upsert_schedule(self, chain: str, template_id: str, next_due: int) -> None:
         await self._conn.execute(
             """INSERT INTO discovery_schedule (chain, template_id, next_due_at)
@@ -416,6 +435,13 @@ class Repository:
         )
         return cursor.rowcount > 0
 
+    async def update_update_result(self, update_id: int, result: dict) -> None:
+        """业务处理完成后回写结果（第 8.3 节：重复 update 返回已保存结果）。"""
+        await self._conn.execute(
+            "UPDATE telegram_updates SET result = ? WHERE update_id = ?",
+            (json.dumps(result, ensure_ascii=False), update_id),
+        )
+
     async def get_update(self, update_id: int) -> aiosqlite.Row | None:
         cursor = await self._conn.execute(
             "SELECT * FROM telegram_updates WHERE update_id = ?", (update_id,)
@@ -533,6 +559,21 @@ class Repository:
             (limit,),
         )
         return list(await cursor.fetchall())
+
+    async def aggregate_bars_range(
+        self, chain: str, entity_address: str, start_ms: int, end_ms: int
+    ) -> tuple[str | None, str | None]:
+        """区间高低点聚合（1m 行情缓存）。"""
+        cursor = await self._conn.execute(
+            """SELECT MAX(high) AS h, MIN(low) AS l FROM market_bars
+               WHERE chain = ? AND entity_address = ?
+                 AND candle_timestamp >= ? AND candle_timestamp <= ?""",
+            (chain, entity_address, start_ms, end_ms),
+        )
+        row = await cursor.fetchone()
+        if row is None or row["h"] is None:
+            return None, None
+        return str(row["h"]), str(row["l"])
 
     # -- api_usage ----------------------------------------------------------
 

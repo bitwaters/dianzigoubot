@@ -434,6 +434,8 @@ class SignalPipeline:
             return
         if not (pool.base_token_address and pool.address):
             return
+        if not self._trusted_quote(pool):
+            return  # 文档第 4.4 节：无可信报价资产池仅观察
         token = pool.base_token_address
         candidate_pools = [pool.address]
 
@@ -443,7 +445,7 @@ class SignalPipeline:
         if result.security is None or not result.security.passed:
             return
 
-        # G3 FOCUS（最长 focus_seconds_max，最多 focus_messages_max 条）
+        # G3 FOCUS（最长 focus_seconds_max）
         focus_ms = self.strategy.collection.websocket.focus_seconds_max * 1000
         added = self._ws.add_g3_pool(pool.address, "base")
         if not added:
@@ -459,7 +461,13 @@ class SignalPipeline:
         if window is None:
             return  # INCOMPLETE：缺秒或不足 10 根
 
-        # 第二份聚合快照（与第一份本地接收时间相隔至少 10 秒）
+        # 两份快照本地接收时间相隔至少 10 秒（文档第 4.4 节）
+        if result.first_snapshot_at_ms is not None:
+            wait_ms = result.first_snapshot_at_ms + 10_000 - utc_now_ms()
+            if wait_ms > 0:
+                await asyncio.sleep(wait_ms / 1000)
+
+        # 第二份聚合快照
         try:
             details = await self._cg.pools_multi(
                 self.chain, candidate_pools, include_volume_breakdown=True
@@ -492,9 +500,13 @@ class SignalPipeline:
         if not decision.emit_signal:
             return
 
-        # PRE_EXECUTION_CHECK（120 秒快照）
+        # PRE_EXECUTION_CHECK（120 秒快照；主池随检查传递，Top10 排除 LP 池）
         pre_exec = await self._pipeline._security_check(
-            token, result.token_info, result.holders, kind="PRE_EXECUTION_CHECK"
+            token,
+            result.token_info,
+            result.holders,
+            kind="PRE_EXECUTION_CHECK",
+            main_pool_address=pool.address,
         )
         if pre_exec is None or not pre_exec.passed:
             return
@@ -529,14 +541,27 @@ class SignalPipeline:
             text=text,
         )
 
+    def _trusted_quote(self, pool) -> bool:
+        """可信报价资产门禁：base/quote 任一侧命中该链 trusted_quote_assets（文档第 4.4 节）。"""
+        assets = self.strategy.market_quality.trusted_quote_assets
+        allowed = {a.address for a in assets}
+        if self.chain == "bsc":
+            allowed = {a.lower() for a in allowed}
+
+        def _match(address):
+            if not address:
+                return False
+            norm = address.lower() if self.chain == "bsc" else address
+            return norm in allowed
+
+        return _match(pool.quote_token_address) or _match(pool.base_token_address)
+
     def _build_snapshot(self, token, pool_address, window, detail, result) -> CandidateSnapshot:
         from app.core.clients.coingecko import TxBucket as _TB
 
         m5 = detail.transactions.get("m5")
         m15 = detail.transactions.get("m15")
-        sec_fields = result.security.fields if result.security else {}
-        top10 = _field_decimal(sec_fields.get("top10_holding_pct"))
-        lp = _field_decimal(sec_fields.get("lp_locked_pct"))
+        values = result.security.values if result.security else {}
         return CandidateSnapshot(
             chain=self.chain,
             token_address=token,
@@ -555,9 +580,11 @@ class SignalPipeline:
             gt_score=result.token_info.gt_score if result.token_info else None,
             gt_verified=result.token_info.gt_verified if result.token_info else None,
             holder_count=result.token_info.holder_count if result.token_info else None,
-            top10_holding_pct=top10,
-            developer_or_creator_holding_pct=None,
-            lp_locked_pct=lp,
+            top10_holding_pct=_as_decimal(values.get("top10_holding_pct")),
+            developer_or_creator_holding_pct=_as_decimal(
+                values.get("developer_or_creator_holding_pct")
+            ),
+            lp_locked_pct=_as_decimal(values.get("lp_locked_pct")),
         )
 
     async def _load_state(self, token: str) -> CandidateRuntime:
@@ -589,6 +616,15 @@ def _field_decimal(field) -> Optional[Decimal]:
     detail = getattr(field, "detail", None)
     try:
         return Decimal(str(detail)) if detail else None
+    except Exception:
+        return None
+
+
+def _as_decimal(value) -> Optional[Decimal]:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
     except Exception:
         return None
 

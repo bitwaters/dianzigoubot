@@ -40,6 +40,7 @@ class FieldResult:
 @dataclass
 class SecurityResult:
     fields: dict[str, FieldResult] = field(default_factory=dict)
+    values: dict[str, Decimal | int | str | None] = field(default_factory=dict)
     trade_allowed: bool = True
 
     def set(
@@ -53,6 +54,9 @@ class SecurityResult:
 
     def set_field(self, name: str, field: FieldResult) -> None:
         self.fields[name] = field
+
+    def set_value(self, name: str, value: Decimal | int | str | None) -> None:
+        self.values[name] = value
 
     def recompute(self) -> None:
         self.trade_allowed = all(
@@ -264,6 +268,7 @@ def evaluate_bsc(
         exclude_addresses={main_pool_address} if main_pool_address else None,
         chain_norm=str.lower,
     )
+    result.set_value("top10_holding_pct", top10)
     if top10 is None:
         result.set("top10_holding_pct", "UNKNOWN", "NO_VALID_SOURCE")
     elif top10 > security_cfg.top10_holding_pct_max:
@@ -272,7 +277,17 @@ def evaluate_bsc(
         result.set("top10_holding_pct", "SAFE")
 
     # -- LP 锁仓（主池匹配 V2） --
-    result.set_field("lp_locked_pct", _bsc_lp_locked(goplus, main_pool_address, security_cfg))
+    lp_field = _bsc_lp_locked(goplus, main_pool_address, security_cfg)
+    result.set_field("lp_locked_pct", lp_field)
+    result.set_value("lp_locked_pct", _pct_from_detail(lp_field))
+    result.set_value(
+        "developer_or_creator_holding_pct",
+        max(
+            (goplus.creator_percent or Decimal(0)),
+            (goplus.owner_percent or Decimal(0)),
+        )
+        * 100,
+    )
 
     # -- 父风险级联（第 5.4 节字段规则） --
     if goplus.is_open_source == "0":
@@ -427,6 +442,7 @@ def evaluate_solana(
         burn_addresses=BURN_ADDRESSES_SOL,
         exclude_addresses={main_pool_address} if main_pool_address else None,
     )
+    result.set_value("top10_holding_pct", top10)
     if top10 is None:
         result.set("top10_holding_pct", "UNKNOWN", "NO_VALID_SOURCE")
     elif top10 > security_cfg.top10_holding_pct_max:
@@ -435,7 +451,13 @@ def evaluate_solana(
         result.set("top10_holding_pct", "SAFE")
 
     # LP 保护（主池匹配，第 5.6 节 liquidity_lock_risk）
-    result.set_field("lp_locked_pct", _sol_lp_locked(goplus, main_pool_address, security_cfg))
+    lp_field = _sol_lp_locked(goplus, main_pool_address, security_cfg)
+    result.set_field("lp_locked_pct", lp_field)
+    result.set_value("lp_locked_pct", _pct_from_detail(lp_field))
+    result.set_value(
+        "developer_or_creator_holding_pct",
+        token_info.developer_holding_percentage,
+    )
 
     result.recompute()
     return result
@@ -498,6 +520,16 @@ def _to_decimal_safe(value) -> Optional[Decimal]:
         return None
     try:
         return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _pct_from_detail(field: FieldResult) -> Decimal | None:
+    """从 FieldResult.detail（如 "95%"）解析百分比数值。"""
+    if field.detail is None:
+        return None
+    try:
+        return Decimal(str(field.detail).rstrip("%"))
     except Exception:
         return None
 

@@ -87,11 +87,34 @@ async def main() -> None:
 
         return handler
 
+    # G1 顶部池映射缓存（文档第 4.4 节：G1 事件触发映射解析）
+    top_pool_cache: dict[str, dict] = {}
+    top_pool_ttl_ms = 300_000
+
+    def _g1_handler(chain):
+        async def handler(event):
+            token = event.token_address
+            entry = top_pool_cache.get(token)
+            now = _now_ms()
+            if entry is not None and now - entry["at"] < top_pool_ttl_ms:
+                return
+            try:
+                pools = await cg.top_pools_by_token(
+                    chain, token, include="base_token,quote_token,dex"
+                )
+                top_pool_cache[token] = {"at": now, "pools": pools}
+                log.info("G1 顶部池映射已刷新 %s %s (%d 池)", chain, token[:10], len(pools))
+            except Exception as exc:
+                log.warning("顶部池映射刷新失败 %s: %s", token[:10], exc)
+
+        return handler
+
     for chain in ("solana", "bsc"):
         ws_clients[chain] = CoinGeckoWS(
             settings.coingecko_api_key,
             chain,
             credit_gate=ws_gates[chain],
+            on_g1_event=_g1_handler(chain),
             on_g3_event=_g3_handler(chain),
         )
 
@@ -112,9 +135,16 @@ async def main() -> None:
     cleaner = RetentionCleaner(repo)
     capacity = CapacityManager(settings.db_path.parent)
 
-    # 3. 恢复顺序：事件补发 → 插件 → 订阅（发现最后启动）
+    # 3. 恢复顺序：事件补发 → 今日 WS 计数 → 插件 → 订阅（发现最后启动）
     bus.start()
     await bus.resend_unpublished()
+
+    day_start = _day_start_ms()
+    ws_used_today = await repo.sum_ws_charged_since(day_start)
+    for gate in ws_gates.values():
+        gate.restore(ws_used_today)
+    if ws_used_today:
+        log.info("WS 今日计费恢复: %d", ws_used_today)
 
     plugins_config = load_plugins_config(settings.plugins_config_path)
     plugin_contexts = await load_plugins(
@@ -145,27 +175,42 @@ async def main() -> None:
             admin_chat_id=settings.telegram_admin_id,
             active_snapshot=(strategy_revision, strategy_hash),
         )
-        ws_clients[chain].on_g3_event = None
         discovery.on_pool = lambda pool, label, tpl, p=pipeline: _dispatch(p, pool, label)
         pipelines[chain] = pipeline
         ws_clients[chain].start()
         discovery_tasks[chain] = discovery
 
-    # 4. 维护任务
+    # 4. 维护任务：过期作废 + api_usage 持久化 + 容量与清理
     async def maintenance_loop():
         while True:
             try:
+                now = _now_ms()
+                # 信号过期 → 作废并发布 signal_invalidated（文档第 7.2 节）
+                for row in await repo.list_expired_signals(now):
+                    await repo.invalidate_signal(row["signal_id"], "EXPIRED", invalidated_at=now)
+                    await bus.publish_signal_invalidated(row["signal_id"])
+                # 用量账本周期性落库（api_usage 表，文档第 9.3 节）
+                for interface, count in cg.usage.snapshot().items():
+                    await repo.record_api_usage(
+                        "REST", interface.replace("rest:", ""), attempts=count
+                    )
+                ws_total = cg.usage.ws_total()
+                if ws_total > 0:
+                    await repo.record_api_usage("WS", "all", charged_responses=ws_total)
+                cg.usage.clear()
+
                 state = capacity.state()
                 if state == "STOP_SIGNALS":
                     admin.paused = True
                     log.warning("容量 90%%：停止新信号")
                 elif state == "STOP_BACKFILL":
                     log.warning("容量 80%%：停止历史回补")
-                await cleaner.run(int(asyncio.get_event_loop().time() * 1000))
-                await cleaner.cleanup_outbox_terminal(int(asyncio.get_event_loop().time() * 1000))
+                await cleaner.run(now)
+                await cleaner.cleanup_outbox_terminal(now)
+                await repo.conn.commit()
             except Exception:
                 log.exception("维护循环异常")
-            await asyncio.sleep(3600)
+            await asyncio.sleep(300)
 
     maintenance_task = asyncio.create_task(maintenance_loop())
 
@@ -284,6 +329,15 @@ def _now_ms() -> int:
     from app.core.models import utc_now_ms
 
     return utc_now_ms()
+
+
+def _day_start_ms() -> int:
+    """当日 UTC 零点（毫秒）。"""
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start = datetime.datetime(now.year, now.month, now.day, tzinfo=datetime.timezone.utc)
+    return int(start.timestamp() * 1000)
 
 
 if __name__ == "__main__":

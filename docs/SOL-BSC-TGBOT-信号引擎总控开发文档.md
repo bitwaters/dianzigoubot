@@ -251,6 +251,7 @@ Pool Trades 返回少于 `trade_response_limit` 条时，最近窗口为 `COMPLE
 - 在信号发出后 15m、1h、6h、24h 四个定点，用 Multiple Pools 查询决定池，记录价格、区间高低点、流动性与池状态到 `outcome_snapshots`。
 - 结果追踪 MUST NOT 占用 G1/G3 订阅；每次查询遵循第 4.6 节的 REST 并发上限。
 - 定点查询失败时最多补洞重试一次；连续失败记为该标签的数据缺口。
+- 区间高低点来自该信号区间内的 1m 行情缓存（market_bars）；无缓存时为 null 并记录区间数据可用性。
 - spike 结论已锁定（2026-08-14 实测）：`simple token_price` 只返回价格，不含流动性与池状态，不满足结果标签需求；结果追踪固定使用 Multiple Pools。
 - 历史 OHLCV 回补与结果标签的关系见第 10 章。
 

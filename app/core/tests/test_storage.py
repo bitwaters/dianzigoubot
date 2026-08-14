@@ -220,6 +220,50 @@ class TestRepository:
         assert row["invalidated_reason"] == "EXPIRED"
         await db.close()
 
+    async def test_expired_scan_and_ws_usage(self, db_path):
+        db = await _open_db(db_path)
+        repo = Repository(db.conn)
+        await repo.insert_signal(
+            signal_id="expired1",
+            chain="solana",
+            token_address="T1",
+            pool_address="P1",
+            signal_level="BUY",
+            total_score="80",
+            reference_price="1",
+            signal_generation=1,
+            strategy_revision="strategy-1",
+            strategy_hash="h",
+            security_snapshot={},
+            decision_snapshot={},
+            expires_at=100,
+        )
+        await repo.insert_signal(
+            signal_id="valid1",
+            chain="solana",
+            token_address="T2",
+            pool_address="P2",
+            signal_level="BUY",
+            total_score="80",
+            reference_price="1",
+            signal_generation=1,
+            strategy_revision="strategy-1",
+            strategy_hash="h",
+            security_snapshot={},
+            decision_snapshot={},
+            expires_at=9_999_999_999_999,
+        )
+        expired = await repo.list_expired_signals(now_ms=1000)
+        assert [r["signal_id"] for r in expired] == ["expired1"]
+        await repo.invalidate_signal("expired1", "EXPIRED", invalidated_at=1000)
+        assert await repo.list_expired_signals(now_ms=1000) == []
+
+        await repo.record_api_usage("WS", "all", charged_responses=42)
+        await repo.conn.commit()
+        assert await repo.sum_ws_charged_since(0) == 42
+        assert await repo.sum_ws_charged_since(10**15) == 0
+        await db.close()
+
 
 class TestBackup:
     async def test_backup_file(self, db_path, tmp_path):

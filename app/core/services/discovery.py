@@ -201,6 +201,7 @@ class DeepCheckResult:
     security: SecurityResult | None = None
     security_kind: str | None = None
     pool_details: dict[str, PoolDetail] = field(default_factory=dict)
+    first_snapshot_at_ms: int | None = None
     completed: bool = False
     errors: dict[str, str] = field(default_factory=dict)
 
@@ -242,6 +243,7 @@ class CandidatePipeline:
                 self.chain, candidate_pool_addresses, include_volume_breakdown=True
             )
             result.pool_details = {d.address: d for d in details}
+            result.first_snapshot_at_ms = utc_now_ms()
         except Exception as exc:
             result.errors["pools_multi"] = f"{type(exc).__name__}"
 
@@ -255,8 +257,13 @@ class CandidatePipeline:
             result.errors["top_holders"] = f"{type(exc).__name__}"
 
         # 4. GoPlus PRE_MONITOR_CHECK（成功快照 15 分钟 TTL 可复用）
+        main_pool = candidate_pool_addresses[0] if candidate_pool_addresses else None
         security = await self._security_check(
-            token_address, result.token_info, result.holders, kind="PRE_MONITOR_CHECK"
+            token_address,
+            result.token_info,
+            result.holders,
+            kind="PRE_MONITOR_CHECK",
+            main_pool_address=main_pool,
         )
         if security is None:
             result.errors["security"] = "go_plus_unavailable"
@@ -276,6 +283,7 @@ class CandidatePipeline:
         holders: TopHolders,
         *,
         kind: str,
+        main_pool_address: str | None = None,
     ) -> SecurityResult | None:
         if kind == "PRE_MONITOR_CHECK":
             row = await self.repo.latest_security_check(
@@ -298,7 +306,7 @@ class CandidatePipeline:
                     token_info=token_info,
                     goplus=raw,
                     security_cfg=self.strategy.security,
-                    main_pool_address=None,
+                    main_pool_address=main_pool_address,
                     coin_holders=holders,
                 )
             else:
@@ -310,7 +318,7 @@ class CandidatePipeline:
                     token_info=token_info,
                     goplus=raw,
                     security_cfg=self.strategy.security,
-                    main_pool_address=None,
+                    main_pool_address=main_pool_address,
                     coin_holders=holders,
                 )
         except Exception as exc:

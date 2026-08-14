@@ -82,6 +82,34 @@ class TestUpdatePoller:
         assert await repo.get_committed_offset() == 3
         await db.close()
 
+    async def test_update_result_persisted(self, db_path):
+        db = await _open(db_path)
+        repo = Repository(db.conn)
+        queue = asyncio.Queue()
+
+        async def fetch(offset, timeout):
+            return await queue.get()
+
+        async def on_update(update):
+            pass
+
+        poller = UpdatePoller(repo, fetch, poll_interval=0.01)
+        poller.on_update = on_update
+        await queue.put([{"update_id": 1, "message": {"text": "/status"}}])
+        await queue.put([])
+        await poller.start()
+        for _ in range(100):
+            row = await repo.get_update(1)
+            if row and "ok" in row["result"]:
+                break
+            await asyncio.sleep(0.01)
+        await poller.stop()
+        row = await repo.get_update(1)
+        assert row is not None
+        assert '"handled": "ok"' in row["result"] or "handled" in row["result"]
+        assert await repo.get_committed_offset() == 2
+        await db.close()
+
     async def test_fetch_error_recovered(self, db_path):
         db = await _open(db_path)
         repo = Repository(db.conn)
