@@ -155,6 +155,24 @@ async def main() -> None:
     admin.register("/strategy", core.strategy_command)
     admin.register("/telegram", core.telegram_command)
 
+    async def status_provider() -> str:
+        """/status 补充运行活动数据（候选/信号/投递/WS 状态）。"""
+        lines = []
+        for table in ("candidates", "signals"):
+            cursor = await repo.conn.execute(f"SELECT COUNT(*) FROM {table}")
+            row = await cursor.fetchone()
+            lines.append(f"{table}: {int(row[0])}")
+        cursor = await repo.conn.execute(
+            "SELECT COUNT(*) FROM telegram_outbox WHERE status IN ('PENDING','SENDING','FAILED')"
+        )
+        row = await cursor.fetchone()
+        lines.append(f"outbox 未终态: {int(row[0])}")
+        for chain in ("solana", "bsc"):
+            lines.append(f"ws[{chain}]: {ws_clients[chain].state}")
+        return "\n".join(lines)
+
+    admin.set_status_provider(status_provider)
+
     outcome = OutcomeTracker(repo, cg, rest_gate)
     cleaner = RetentionCleaner(repo)
     capacity = CapacityManager(settings.db_path.parent)

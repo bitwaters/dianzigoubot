@@ -442,6 +442,23 @@ class SignalPipeline:
         if not (pool.base_token_address and pool.address):
             return
         token = pool.base_token_address
+        # 候选在发现准入时即落库（WATCHING + 标签），管线只更新状态（文档第 7.1 节）
+        if label is not None:
+            try:
+                await self._repo.upsert_candidate(
+                    self.chain,
+                    token,
+                    pool.address,
+                    status="WATCHING",
+                    labels=[label.main] if label.main else [],
+                    main_label=label.main or None,
+                    expires_at=(
+                        utc_now_ms()
+                        + self.strategy.discovery.candidate_ttl_seconds * 1000
+                    ),
+                )
+            except Exception:
+                log.exception("候选落库失败 %s", token)
         self._pending.setdefault(token, []).append(pool)
         if token not in self._processing:
             self._processing.add(token)
