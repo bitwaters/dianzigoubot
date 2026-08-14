@@ -67,7 +67,12 @@ class UpdatePoller:
                             await self.on_update(update)
                     except Exception as exc:
                         result = {"handled": "error", "error": str(exc)}
-                        log.warning("update 处理异常 %s: %s", update_id, exc)
+                        log.warning(
+                            "update 处理异常 %s: %s | update=%s",
+                            update_id,
+                            exc,
+                            str(update)[:300],
+                        )
                     finally:
                         await self._repo.update_update_result(update_id, result)
                         # 业务事务提交后推进 offset

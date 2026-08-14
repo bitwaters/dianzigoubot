@@ -308,8 +308,9 @@ async def main() -> None:
                 if reply_markup:
                     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+                    # PTB 要求 inline_keyboard 为"序列的序列"：单行放置全部按钮
                     kwargs["reply_markup"] = InlineKeyboardMarkup(
-                        [InlineKeyboardButton(**btn) for btn in reply_markup]
+                        [[InlineKeyboardButton(**btn) for btn in reply_markup]]
                     )
                 message = await bot.send_message(
                     chat_id=chat_id, text=text, **kwargs
