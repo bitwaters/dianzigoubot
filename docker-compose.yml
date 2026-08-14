@@ -1,0 +1,14 @@
+services:
+  bot:
+    build: .
+    container_name: dianzigoubot
+    restart: unless-stopped
+    env_file:
+      - dianzigou.env
+    environment:
+      BOT_DB_PATH: /app/data/bot.sqlite
+      STRATEGY_PATH: /app/config/strategy.yaml
+      PLUGINS_CONFIG_PATH: /app/config/plugins.yaml
+      LOG_LEVEL: INFO
+    volumes:
+      - ./data:/app/data
