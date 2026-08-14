@@ -52,26 +52,33 @@ class UsageService:
         self.alert_threshold = alert_threshold
 
     async def budget_lines(self) -> list[str]:
+        from app.core.services.admin import REST_INTERFACE_ZH
+
         info = None
         try:
             info = await self._key_provider()
         except Exception as exc:
-            return [f"/key 查询失败: {exc}"]
+            return [f"额度查询失败: {exc}"]
         lines = []
         if info is not None:
             lines.append(
-                f"plan: {info.plan}｜剩余: {info.current_remaining_monthly_calls}｜"
-                f"RPM: {info.rate_limit_request_per_minute}"
+                f"套餐: {info.plan}｜剩余额度: {info.current_remaining_monthly_calls:,}｜"
+                f"每分钟限速: {info.rate_limit_request_per_minute}"
             )
             if (
                 self.alert_threshold is not None
                 and info.current_remaining_monthly_calls is not None
                 and info.current_remaining_monthly_calls < self.alert_threshold
             ):
-                lines.append(f"⚠️ 剩余额度低于告警阈值 {self.alert_threshold}")
+                lines.append(f"⚠️ 剩余额度低于告警阈值 {self.alert_threshold:,}")
         rest = self._rest_ledger.snapshot()
         if rest:
-            lines.append("REST 计数: " + ", ".join(f"{k}={v}" for k, v in sorted(rest.items())))
+            parts = []
+            for key, value in sorted(rest.items()):
+                interface = key.replace("rest:", "")
+                label = REST_INTERFACE_ZH.get(interface, interface)
+                parts.append(f"{label} {value} 次")
+            lines.append("REST 调用: " + "，".join(parts))
         for name, gate in self._credit_gates.items():
-            lines.append(f"WS[{name}] 今日已用: {gate.used}/{gate.daily_budget}")
+            lines.append(f"实时行情[{name}] 今日用量: {gate.used}/{gate.daily_budget}")
         return lines or ["无额度数据"]

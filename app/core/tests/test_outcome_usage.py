@@ -170,7 +170,7 @@ class TestUsageService:
         )
         lines = await service.budget_lines()
         assert any("Analyst" in line for line in lines)
-        assert any("pools-megafilter" in line for line in lines)
+        assert any("池筛选" in line for line in lines)
 
     async def test_alert_threshold(self):
         async def provider():
@@ -190,4 +190,4 @@ class TestUsageService:
 
         service = UsageService(key_provider=fail, rest_ledger=UsageLedger())
         lines = await service.budget_lines()
-        assert lines[0].startswith("/key 查询失败")
+        assert lines[0].startswith("额度查询失败")

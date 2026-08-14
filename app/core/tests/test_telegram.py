@@ -299,9 +299,9 @@ class TestCoreActions:
         assert core.confirm_payload("/status", "") is None
 
         status = await core.strategy_command("status")
-        assert "strategy-1" in status
+        assert "strategy-2" in status
         usage = await core.strategy_command("backtest")
-        assert "信号数" in usage
+        assert "历史信号" in usage
         await db.close()
 
     async def test_telegram_retry_requeue(self, db_path):

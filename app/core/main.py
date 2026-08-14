@@ -158,25 +158,28 @@ async def main() -> None:
     admin.register("/telegram", core.telegram_command)
 
     async def status_provider() -> str:
-        """/status 补充运行活动数据（候选/信号/投递/WS 状态/管线阶段计数）。"""
+        """/status 补充运行活动数据（中文标签展示）。"""
+        from app.core.services.admin import PIPELINE_STAGE_ZH, WS_STATE_ZH
+
         lines = []
-        for table in ("candidates", "signals"):
+        for table, label in (("candidates", "候选"), ("signals", "信号")):
             cursor = await repo.conn.execute(f"SELECT COUNT(*) FROM {table}")
             row = await cursor.fetchone()
-            lines.append(f"{table}: {int(row[0])}")
+            lines.append(f"{label}: {int(row[0])}")
         cursor = await repo.conn.execute(
             "SELECT COUNT(*) FROM telegram_outbox WHERE status IN ('PENDING','SENDING','FAILED')"
         )
         row = await cursor.fetchone()
-        lines.append(f"outbox 未终态: {int(row[0])}")
+        lines.append(f"待投递消息: {int(row[0])}")
         for chain in ("solana", "bsc"):
-            lines.append(f"ws[{chain}]: {ws_clients[chain].state}")
+            state = ws_clients[chain].state
+            lines.append(f"实时行情[{chain}]: {WS_STATE_ZH.get(state, state)}")
         for chain in ("solana", "bsc"):
             stages = pipelines[chain].stages
-            lines.append(
-                f"pipeline[{chain}]: "
-                + " ".join(f"{k}={v}" for k, v in stages.items())
-            )
+            parts = [
+                f"{PIPELINE_STAGE_ZH.get(k, k)}={v}" for k, v in stages.items()
+            ]
+            lines.append(f"管线[{chain}]: " + " ".join(parts))
         return "\n".join(lines)
 
     admin.set_status_provider(status_provider)
@@ -549,18 +552,20 @@ class CoreActions:
         return f"已重新入队: {key}"
 
     async def strategy_command(self, args: str) -> str:
+        from app.core.services.admin import TEMPLATE_ID_ZH
+
         parts = args.split(maxsplit=1)
         sub = parts[0] if parts else ""
         sub_args = parts[1] if len(parts) > 1 else ""
         if sub == "status":
             active = await self._activation.current_active()
             if active is None:
-                return "无 ACTIVE 策略"
+                return "无已激活策略"
             return (
-                f"ACTIVE: {active['revision']}\n"
-                f"hash: {active['strategy_hash']}\n"
-                f"parent: {active['parent_revision'] or '-'}\n"
-                f"reason: {active['change_reason']}"
+                f"当前策略: {active['revision']}\n"
+                f"哈希: {active['strategy_hash']}\n"
+                f"上一版本: {active['parent_revision'] or '无'}\n"
+                f"变更原因: {active['change_reason']}"
             )
         if sub == "validate-collection":
             from app.core.config import load_strategy_file
@@ -569,20 +574,20 @@ class CoreActions:
             try:
                 candidate = load_strategy_file(self._strategy_path)
             except Exception as exc:
-                return f"strategy.yaml 校验失败: {exc}"
-            lines = ["collection dry-run:"]
+                return f"策略文件校验失败: {exc}"
+            lines = ["采集通道试跑:"]
             for chain in ("solana", "bsc"):
                 report = await collection_dry_run(
                     chain, getattr(candidate, chain), self._cg
                 )
                 for tpl_id, entry in report["templates"].items():
+                    label = TEMPLATE_ID_ZH.get(tpl_id, tpl_id)
                     if entry["ok"]:
                         lines.append(
-                            f"  {chain}/{tpl_id}: {entry['count']} 池 "
-                            f"({entry['latency_seconds']}s)"
+                            f"  {label}: {entry['count']} 池（{entry['latency_seconds']}秒）"
                         )
                     else:
-                        lines.append(f"  {chain}/{tpl_id}: ERROR {entry['error']}")
+                        lines.append(f"  {label}: 失败 {entry['error']}")
             return "\n".join(lines)
         if sub == "backtest":
             return await self._backtest_summary()
@@ -598,8 +603,6 @@ class CoreActions:
         )
 
     async def _backtest_summary(self) -> str:
-        from app.core.services.strategy import StrategyActivationService
-
         active = await self._activation.current_active()
         cursor = await self._repo.conn.execute("SELECT COUNT(*) FROM signals")
         row = await cursor.fetchone()
@@ -616,12 +619,12 @@ class CoreActions:
         bars_count = int(row[0])
         lines = [
             "回测数据覆盖:",
-            f"  信号数: {signal_count}",
-            f"  结果标签数: {outcome_count}",
-            f"  1m 行情条数: {bars_count}",
+            f"  历史信号: {signal_count} 条",
+            f"  结果标签: {outcome_count} 条",
+            f"  1m行情缓存: {bars_count} 条",
         ]
         if active is not None:
-            lines.append(f"  ACTIVE: {active['revision']}")
+            lines.append(f"  当前策略: {active['revision']}")
         if signal_count == 0:
             lines.append("暂无历史信号；回测需要决策快照积累，请先运行积累数据。")
         return "\n".join(lines)
