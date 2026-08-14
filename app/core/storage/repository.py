@@ -267,6 +267,27 @@ class Repository:
             (invalidated_at or utc_now_ms(), reason, signal_id),
         )
 
+    async def upsert_schedule(self, chain: str, template_id: str, next_due: int) -> None:
+        await self._conn.execute(
+            """INSERT INTO discovery_schedule (chain, template_id, next_due_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(chain, template_id) DO UPDATE SET next_due_at = excluded.next_due_at""",
+            (chain, template_id, next_due),
+        )
+
+    async def get_next_due(self, chain: str, template_id: str) -> int | None:
+        cursor = await self._conn.execute(
+            "SELECT next_due_at FROM discovery_schedule WHERE chain = ? AND template_id = ?",
+            (chain, template_id),
+        )
+        row = await cursor.fetchone()
+        return int(row["next_due_at"]) if row else None
+
+    async def reset_schedule(self, chain: str) -> None:
+        await self._conn.execute(
+            "DELETE FROM discovery_schedule WHERE chain = ?", (chain,)
+        )
+
     # -- api_usage ----------------------------------------------------------
 
     async def record_api_usage(

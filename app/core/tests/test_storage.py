@@ -63,12 +63,15 @@ class TestMigrations:
         await db.close()
 
     async def test_idempotent_reopen(self, db_path):
+        from app.core.storage.database import MIGRATIONS_DIR
+
         db = await _open_db(db_path)
         await db.close()
         db2 = await _open_db(db_path)
         cursor = await db2.conn.execute("SELECT COUNT(*) FROM schema_migrations")
         row = await cursor.fetchone()
-        assert int(row[0]) == 1
+        expected = len(list(MIGRATIONS_DIR.glob("*.sql")))
+        assert int(row[0]) == expected
         await db2.close()
 
     async def test_prisma(self, db_path):

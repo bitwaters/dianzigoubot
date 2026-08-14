@@ -19,10 +19,10 @@
 
 ### 3. 供应商 clients
 
-- [ ] 3.1 CoinGecko REST client（httpx、错误分类、速率处理）与归一化模型
-- [ ] 3.2 首次能力探测报告（带 Python 版本/脚本版本/UTC 元数据；含 G2 逐条计费契约探测）与契约测试 fixture 机制
-- [ ] 3.3 GoPlus client（无 Authorization、30 次/分钟限流）与双链字段归一化（文档第 5.4/5.6 节映射）
-- [ ] 3.4 `/key` client 与用量告警/展示数据（文档第 4.6 节简化版）
+- [x] 3.1 CoinGecko REST client（httpx、错误分类、速率处理）与归一化模型
+- [x] 3.2 首次能力探测报告（带 Python 版本/脚本版本/UTC 元数据；含 G2 逐条计费契约探测）与契约测试 fixture 机制
+- [x] 3.3 GoPlus client（无 Authorization、30 次/分钟限流）与双链字段归一化（文档第 5.4/5.6 节映射）
+- [x] 3.4 `/key` client 与用量告警/展示数据（文档第 4.6 节简化版）
 
 ### 4. 发现与候选流水线
 

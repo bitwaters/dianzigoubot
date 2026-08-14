@@ -819,6 +819,7 @@ PRAGMA synchronous = FULL;
 | `strategy_activations` | activation_id、激活/回退类型、前后 revision/hash、管理员和时间 |
 | `api_usage` | API 状态、耗时和 credits |
 | `discovery_snapshots` | 筛选前特征、REST/G1 来源、顶部池映射、逐池完整规范化决策特征、窗口元数据、字段完整度和采集版本 |
+| `discovery_schedule` | 每条链每个查询模板的 `next_due_at` 持久化（重启恢复调度状态） |
 | `wallet_observations` | 每个候选最多 20 个钱包的策略无关早期买入事实、精确池、价格、时间和来源 |
 | `wallet_outcome_labels` | 观察 ID、策略 hash、`SUCCESS/FAILURE/NEUTRAL/DATA_GAP`、触发时间和计算证据 |
 | `wallet_reputation` | 按链、策略 hash 和计算时点重建的钱包样本数、覆盖率、成功/失败/中性、归零/撤池暴露和 LOCAL_SMART 状态 |
