@@ -224,17 +224,17 @@ solana:
           local_smart_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
             good: "10"
-            weight: "0.35"
+            weight: "0"
             missing_action: ZERO_SCORE
           token_profitable_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
             good: "8"
-            weight: "0.35"
+            weight: "0.6"
             missing_action: ZERO_SCORE
           active_smart_wallets_60s:
             bad: "0"
             good: "5"
-            weight: "0.3"
+            weight: "0.4"
             missing_action: ZERO_SCORE
       microstructure:
         weight: "0.1"
@@ -525,17 +525,17 @@ bsc:
           local_smart_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
             good: "10"
-            weight: "0.35"
+            weight: "0"
             missing_action: ZERO_SCORE
           token_profitable_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
             good: "8"
-            weight: "0.35"
+            weight: "0.6"
             missing_action: ZERO_SCORE
           active_smart_wallets_60s:
             bad: "0"
             good: "5"
-            weight: "0.3"
+            weight: "0.4"
             missing_action: ZERO_SCORE
       microstructure:
         weight: "0.1"
