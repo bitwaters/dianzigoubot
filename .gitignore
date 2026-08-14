@@ -10,6 +10,7 @@ venv/
 *.sqlite-shm
 .env
 .env.*
+*.env
 *.key
 
 # OS / IDE

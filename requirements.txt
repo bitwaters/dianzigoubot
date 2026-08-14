@@ -1,0 +1,6 @@
+httpx>=0.27
+websockets>=13
+python-telegram-bot>=21
+aiosqlite>=0.20
+pydantic>=2.7
+pyyaml>=6.0
