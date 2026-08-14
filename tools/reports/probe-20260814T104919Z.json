@@ -1,0 +1,97 @@
+{
+  "script": "tools/probe_contracts.py",
+  "script_version": "1",
+  "python_version": "3.13.15",
+  "executed_at_utc": "2026-08-14T10:49:19Z",
+  "report": {
+    "entries": {
+      "key": {
+        "ok": true,
+        "summary": {
+          "plan": "Analyst",
+          "remaining": 497783,
+          "rpm": 500
+        }
+      },
+      "megafilter_solana": {
+        "ok": true,
+        "summary": {
+          "count": 20
+        }
+      },
+      "trending_solana": {
+        "ok": true,
+        "summary": {
+          "count": 20
+        }
+      },
+      "new_pools_solana": {
+        "ok": true,
+        "summary": {
+          "count": 20
+        }
+      },
+      "pools_multi": {
+        "ok": true,
+        "summary": {
+          "count": 1
+        }
+      },
+      "tokens_multi": {
+        "ok": true,
+        "summary": {
+          "count": 1
+        }
+      },
+      "token_info": {
+        "ok": true,
+        "summary": {
+          "gt_score": "68.37768612146972"
+        }
+      },
+      "top_holders": {
+        "ok": true,
+        "summary": {
+          "count": 40
+        }
+      },
+      "top_traders": {
+        "ok": true,
+        "summary": {
+          "count": 20
+        }
+      },
+      "pool_trades": {
+        "ok": true,
+        "summary": {
+          "count": 300
+        }
+      },
+      "pool_ohlcv": {
+        "ok": true,
+        "summary": {
+          "count": 100
+        }
+      },
+      "g2_onchaintrade": {
+        "ok": true,
+        "summary": {
+          "ok": true,
+          "messages_in_10s": 1
+        }
+      },
+      "goplus_solana": {
+        "ok": true,
+        "summary": {
+          "count": 1
+        }
+      },
+      "goplus_bsc": {
+        "ok": true,
+        "summary": {
+          "count": 1
+        }
+      }
+    }
+  }
+}

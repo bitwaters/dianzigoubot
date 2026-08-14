@@ -215,7 +215,7 @@ Pool OHLCV 与 Token OHLCV 只用于结果补全和历史回放，不进入实�
 
 可决定池只从"一侧为目标代币、另一侧地址存在于该链 `market_quality.trusted_quote_assets[].address`"的池中选择；可信资产可以位于池的 base 或 quote 侧。Solana 的可信资产为 WSOL、USDC、USDT，BSC 为 WBNB、USDT、USDC、FDUSD；DEX 中原生 SOL/BNB 分别以 WSOL/WBNB 参与池交易。REST 发现池和 G1 顶部池使用同一套流动性、5 分钟成交、参与者、安全、评分和入场结构规则，不存在 G1 专用阈值或第二套策略。通过宽口径门禁的每个池分别进入 G3 FOCUS 并计算完整分数。池选择屏障在第二份聚合快照完成且所有已准入池进入 `ELIGIBLE/REJECT/INCOMPLETE` 终态时打开；最迟在首个 G3 FOCUS 开始后 15 秒打开，未完成池固定记为 `INCOMPLETE`，不得参与本轮选择。随后按 `trade_allowed > 总分 > 有效流动性 > 5 分钟成交量 > pool_address` 的固定顺序选择唯一决定池；防追高只对该决定池执行，触发等待时连续执行第二轮 G3，等待失败时本轮不回退到其他池。没有可信对手资产池时仅观察；不同池的成交和 K 线不得拼接。最终信号的池级价格、成交量、成交方向、K 线和流动性必须全部来自同一个决定池。
 
-G1 消息本身不含池地址。首次订阅、顶部池映射 TTL 到期或 G1 触发异常价格时，系统使用 Tokens Multi `include=top_pools` 批量解析顶部池；同一链单次最多 50 个代币。顶部池映射键为 `chain + token_address`，池去重键为 `chain + pool_address`：地址与 REST 已发现池相同时合并 `REST/G1_TOP` 来源标签和最新时间，不重复深查、安全检查、评分或订阅 G3；地址不同时作为同一代币下的另一池证据独立计算，最终仍只选一个决定池。
+G1 消息本身不含池地址。首次订阅、顶部池映射 TTL 到期或 G1 触发异常价格时，系统使用 Top Pools by Token Address 端点逐代币解析顶部池（契约测试锁定：Tokens Multi 的 `include=top_pools` 不返回顶部池，不能用于池映射）。顶部池映射键为 `chain + token_address`，池去重键为 `chain + pool_address`：地址与 REST 已发现池相同时合并 `REST/G1_TOP` 来源标签和最新时间，不重复深查、安全检查、评分或订阅 G3；地址不同时作为同一代币下的另一池证据独立计算，最终仍只选一个决定池。
 
 候选主池发生变化时，立即失效该候选已有的池级窗口、LP 匹配、安全结论和未执行信号，退回 `WATCHING` 后按新主池重新补充数据。信号保存发出时的决定池；信号发出后决定池撤池或流动性崩塌时，该信号立即作废并发布 `signal_invalidated`，发现另一个新池不能抵消该作废条件。
 
@@ -223,7 +223,7 @@ G1 消息本身不含池地址。首次订阅、顶部池映射 TTL 到期或 G1
 - CoinGecko Top Holders 的 `last_updated_at` 和 Token Info `holders.last_updated` 必须解析为源数据时间，不能用本地请求完成时间替代。超过 `signals.max_participant_age_seconds`、缺失或位于未来的源时间均记为 `STALE/UNKNOWN` 并禁止发信号。
 - `holder_count` 和持币地址增长只参与评分，不设置最低地址数硬门禁。
 - `top10_holding_pct` 使用所有新鲜且可执行同一排除规则的 CoinGecko Top Holders 与 GoPlus 地址级结果并取最大值；至少一个来源必须有效，两个来源都无法解析时禁止发信号。Token Info holder distribution 只作诊断记录，不参与阈值或评分，因为其聚合值无法重算地址排除集合。
-- Multiple Pools 响应包含 `buy_volume_usd`、`sell_volume_usd`、`net_buy_volume_usd`（m5/m15/m30/h1/h6/h24）。当前策略不将这些字段纳入评分特征（新增特征必须经回测证明，见第 1.2 节与第 10 章）；client 归一化层必须保留这些字段供回测与诊断使用。`include_volume_breakdown` 与该组字段的依赖关系以契约测试结论为准。
+- Multiple Pools 响应包含 `buy_volume_usd`、`sell_volume_usd`、`net_buy_volume_usd`（m5/m15/m30/h1/h6/h24）。契约测试锁定：该组字段仅在请求 `include_volume_breakdown=true` 时返回。当前策略不将这些字段纳入评分特征（新增特征必须经回测证明，见第 1.2 节与第 10 章）；client 归一化层必须保留该组字段供回测与诊断使用。
 
 #### 4.4.1 盈利交易者与本地优质钱包
 
@@ -260,7 +260,7 @@ Pool Trades 返回少于 `trade_response_limit` 条时，最近窗口为 `COMPLE
 
 | 频道 | 用途 | 限制 |
 |---|---|---|
-| G1 OnchainSimpleTokenPrice | 已知候选的顶部池实时增强触发 | G1 不能发现未订阅代币；消息不含池地址，必须先用 Tokens Multi 解析并绑定精确顶部池，绑定后的池进入统一筛选逻辑 |
+| G1 OnchainSimpleTokenPrice | 已知候选的顶部池实时增强触发 | G1 不能发现未订阅代币；消息不含池地址，必须先用 Top Pools by Token Address 解析并绑定精确顶部池，绑定后的池进入统一筛选逻辑 |
 | G2 OnchainTrade | 供应商能力探测 | 服务端逐笔返回并逐条计费，不在运行策略中订阅 |
 | G3 OnchainOHLCV | 精确池秒级确认 | 候选使用目标代币侧 `1s` |
 
@@ -1074,7 +1074,7 @@ config/
 - G1 顶部池映射、REST/G1 池地址去重、统一筛选和同代币单信号；未经池绑定的 G1 价格不得进入评分，G2 运行订阅必须拒绝
 - Multiple Pools 的 m5/m15 成交量、交易数和参与者加速度公式，滚动快照差值不得伪装成精确 10 秒笔数
 - Multiple Pools 无源时间时只保存本地请求/接收时间，相同响应记 `OBSERVATION_LIMITED`，不得证明流动性稳定
-- Multiple Pools `buy_volume_usd/sell_volume_usd/net_buy_volume_usd` 归一化与保留；`include_volume_breakdown` 依赖关系按契约测试结论锁定
+- Multiple Pools `buy_volume_usd/sell_volume_usd/net_buy_volume_usd` 归一化与保留；`include_volume_breakdown=true` 依赖关系按契约测试结论锁定
 - CoinGecko holder 源时间 TTL、未来时间拒绝、至少一个地址级来源有效、双源有效时 Top 10 取最大值以及 holder count 不作硬门禁
 - Top Holders 最终 query 必含 `include_pnl_details=false`，Top Traders 最终 query 必含 `include_address_label=false`，业务模型不得读取被关闭的扩展字段
 - Solana Token Info `is_honeypot="unknown"` 归一化为带原因的 NOT_APPLICABLE，其他类型或值触发契约变化 UNKNOWN；BSC 仍执行布尔门禁

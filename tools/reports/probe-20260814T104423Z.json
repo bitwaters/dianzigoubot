@@ -1,0 +1,38 @@
+{
+  "script": "tools/probe_contracts.py",
+  "script_version": "1",
+  "python_version": "3.13.15",
+  "executed_at_utc": "2026-08-14T10:44:23Z",
+  "report": {
+    "entries": {
+      "key": {
+        "ok": false,
+        "error": "TypeError: 'coroutine' object is not callable"
+      },
+      "megafilter_solana": {
+        "ok": false,
+        "error": "TypeError: 'coroutine' object is not callable"
+      },
+      "trending_solana": {
+        "ok": false,
+        "error": "TypeError: 'coroutine' object is not callable"
+      },
+      "new_pools_solana": {
+        "ok": false,
+        "error": "TypeError: 'coroutine' object is not callable"
+      },
+      "sample": {
+        "ok": false,
+        "error": "无可用采样池"
+      },
+      "goplus_solana": {
+        "ok": false,
+        "error": "TypeError: 'coroutine' object is not callable"
+      },
+      "goplus_bsc": {
+        "ok": false,
+        "error": "TypeError: 'coroutine' object is not callable"
+      }
+    }
+  }
+}

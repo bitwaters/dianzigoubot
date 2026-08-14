@@ -1,0 +1,50 @@
+{
+  "script": "tools/probe_contracts.py",
+  "script_version": "1",
+  "python_version": "3.13.15",
+  "executed_at_utc": "2026-08-14T10:44:37Z",
+  "report": {
+    "entries": {
+      "key": {
+        "ok": true,
+        "summary": {
+          "plan": "Analyst",
+          "remaining": 497850,
+          "rpm": 500
+        }
+      },
+      "megafilter_solana": {
+        "ok": true,
+        "summary": {
+          "count": 20
+        }
+      },
+      "trending_solana": {
+        "ok": true,
+        "summary": {
+          "count": 20
+        }
+      },
+      "new_pools_solana": {
+        "ok": true,
+        "summary": {
+          "count": 20
+        }
+      },
+      "sample": {
+        "ok": false,
+        "error": "无可用采样池"
+      },
+      "goplus_solana": {
+        "ok": true,
+        "summary": {
+          "count": 1
+        }
+      },
+      "goplus_bsc": {
+        "ok": false,
+        "error": "ValidationError: 2 validation errors for EvmHolder\nis_locked\n  Input should be a valid string [type=string_type, input_value=0, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type\nis_contract\n  Input should be a valid string [type=string_type, input_value=1, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type"
+      }
+    }
+  }
+}
