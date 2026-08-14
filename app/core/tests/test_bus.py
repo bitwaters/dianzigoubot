@@ -228,13 +228,22 @@ class TestNotify:
     async def test_send_to_outbox(self, db_path):
         db = await _open(db_path)
         repo = Repository(db.conn)
-        api = NotifyAPI(repo)
+        api = NotifyAPI(repo, target_resolver={"admin": 123, "channel": -100})
         key = await api.send("测试通知", target="admin", priority=2)
         assert key.startswith("n:")
         assert await api.status(key) == "PENDING"
         rows = await repo.list_outbox_pending()
         assert len(rows) == 1
-        assert rows[0]["chat_target"] == "admin"
+        assert rows[0]["chat_target"] == "123"  # 已解析为数字 chat_id
+        await db.close()
+
+    async def test_unknown_target_rejected(self, db_path):
+        db = await _open(db_path)
+        repo = Repository(db.conn)
+        api = NotifyAPI(repo, target_resolver={"admin": 123})
+        with pytest.raises(ValueError, match="未知通知目标"):
+            await api.send("x", target="channel")
+        assert await repo.list_outbox_pending() == []  # 拒绝时不写 outbox
         await db.close()
 
 

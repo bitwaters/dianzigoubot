@@ -184,20 +184,34 @@ class PriorityWriter:
                     batch.append(self._queue.get_nowait())
                 except asyncio.QueueEmpty:
                     drain = False
-            await self._flush(batch)
+            try:
+                await self._flush(batch)
+            except StorageFatalError:
+                log.critical("存储批次持续失败，写入 worker 终止（故障状态）")
+                raise
             batch.clear()
             self._update_backpressure()
 
     async def _flush(self, items: list[_WriteItem]) -> None:
-        try:
-            await self._db.conn.execute("BEGIN")
-            for item in items:
-                await self._db.conn.execute(item.sql, item.params)
-            await self._db.conn.commit()
-        except Exception:
-            await self._db.conn.rollback()
-            log.exception("存储批次写入失败，批次大小 %d", len(items))
-            raise
+        """批次写入；单次失败退避重试 5 次，仍失败进入故障状态。"""
+        for attempt in range(5):
+            try:
+                await self._db.conn.execute("BEGIN")
+                for item in items:
+                    await self._db.conn.execute(item.sql, item.params)
+                await self._db.conn.commit()
+                return
+            except Exception:
+                await self._db.conn.rollback()
+                delay = min(1.0 * (2**attempt), 8.0)
+                log.error(
+                    "存储批次写入失败（%d 条，第 %d/5 次，%.1fs 后重试）",
+                    len(items),
+                    attempt + 1,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        raise StorageFatalError(f"存储批次持续失败：{len(items)} 条写入无法完成")
 
     def _update_backpressure(self) -> None:
         ratio = self._queue.qsize() / self.maxsize

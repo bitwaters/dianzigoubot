@@ -25,6 +25,7 @@ EventHandler = Callable[[dict], Awaitable[None]]
 class PluginState:
     name: str
     handlers: dict[EventType, list[EventHandler]] = field(default_factory=dict)
+    supported_schema_versions: set[str] = field(default_factory=lambda: {"1"})
     consecutive_failures: int = 0
     tripped: bool = False
 
@@ -82,10 +83,15 @@ class EventBus:
 
     # -- 插件注册 -----------------------------------------------------------
 
-    def register_plugin(self, name: str) -> PluginState:
+    def register_plugin(
+        self, name: str, supported_schema_versions: list[str] | None = None
+    ) -> PluginState:
         if name in self._plugins:
             raise ValueError(f"插件重复注册: {name}")
-        state = PluginState(name=name)
+        state = PluginState(
+            name=name,
+            supported_schema_versions=set(supported_schema_versions or ["1"]),
+        )
         self._plugins[name] = state
         return state
 
@@ -150,6 +156,15 @@ class EventBus:
             event_type, event = await self._queue.get()
             for state in self._plugins.values():
                 if state.tripped:
+                    continue
+                # 事件 Schema 版本校验：插件未声明支持的版本不得透传
+                if event.get("schema_version") not in state.supported_schema_versions:
+                    log.warning(
+                        "插件 %s 不支持事件版本 %s，跳过 %s",
+                        state.name,
+                        event.get("schema_version"),
+                        event_type,
+                    )
                     continue
                 for handler in state.handlers.get(event_type, []):
                     await self._dispatch(state, handler, event)

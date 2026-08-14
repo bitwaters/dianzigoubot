@@ -108,6 +108,15 @@ class G3CandleBuffer:
                 return None
         return window
 
+    def final_bars(self, pool: str, side: str) -> list[Candle]:
+        """全部 final K 线（按时间升序）；防追高等待续评使用。"""
+        buf = self._buffers.get((pool, side))
+        if not buf:
+            return []
+        return sorted(
+            (c for c in buf.values() if c.final), key=lambda c: c.open_ts_ms
+        )
+
     def clear(self, pool: str, side: str) -> None:
         self._buffers.pop((pool, side), None)
 
@@ -130,21 +139,40 @@ class G3Event:
 
 
 class DailyCreditGate:
-    """WS 每日预算准入（文档第 4.6 节简化版）。"""
+    """WS 每日预算准入（文档第 4.6 节简化版）；UTC 零点自动重置。"""
 
     def __init__(self, daily_budget: Decimal) -> None:
         self.daily_budget = daily_budget
         self.used = 0
+        self._day = _utc_day_ms()
 
     @property
     def available(self) -> bool:
+        self._rollover()
         return self.used < self.daily_budget
 
     def charge(self, count: int = 1) -> None:
+        self._rollover()
         self.used += count
 
     def restore(self, used: int) -> None:
+        self._rollover()
         self.used = max(self.used, used)
+
+    def _rollover(self) -> None:
+        day = _utc_day_ms()
+        if day != self._day:
+            self._day = day
+            self.used = 0
+
+
+def _utc_day_ms() -> int:
+    """当日 UTC 零点（毫秒）。"""
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start = datetime.datetime(now.year, now.month, now.day, tzinfo=datetime.timezone.utc)
+    return int(start.timestamp() * 1000)
 
 
 class CoinGeckoWS:
@@ -214,7 +242,13 @@ class CoinGeckoWS:
         self._queue_set({"kind": "g1", "tokens": sorted(self._g1_tokens)})
 
     def set_g3_pools(self, pools: set[tuple[str, str]]) -> None:
-        """以当前完整目标集合设置 G3（set_pools）。"""
+        """以当前完整目标集合设置 G3（set_pools）；超过 100 物理上限截断告警。"""
+        if len(pools) > MAX_SUBSCRIPTIONS_PER_CHANNEL:
+            log.warning(
+                "G3 订阅集合 %d 超过物理上限 100，截断",
+                len(pools),
+            )
+            pools = set(sorted(pools)[:MAX_SUBSCRIPTIONS_PER_CHANNEL])
         self._g3_pools = set(pools)
         self._queue_set(
             {"kind": "g3", "pools": sorted(self._g3_pools), "interval": "1s"}
@@ -322,33 +356,50 @@ class CoinGeckoWS:
                     }
                 )
                 identifier = G1_CHANNEL
+                await ws.send(
+                    json.dumps(
+                        {
+                            "command": "message",
+                            "identifier": json.dumps({"channel": identifier}),
+                            "data": data,
+                        }
+                    )
+                )
+                await self._await_set_ack(ws)
             else:
-                data = json.dumps(
-                    {
-                        "network_id:pool_addresses": [
-                            f"{self.network}:{p}" for p, _ in payload["pools"]
-                        ],
-                        "interval": payload["interval"],
-                        "token": "base",
-                        "action": "set_pools",
-                    }
-                )
-                identifier = G3_CHANNEL
-            await ws.send(
-                json.dumps(
-                    {
-                        "command": "message",
-                        "identifier": json.dumps({"channel": identifier}),
-                        "data": data,
-                    }
-                )
-            )
-            try:
-                ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-            except asyncio.TimeoutError:
-                continue
-            if isinstance(ack, dict) and ack.get("code") not in (2000,):
-                log.warning("WS %s set 确认异常: %s", self.network, ack)
+                # G3：按 side 分两条 set_pools 消息，避免重连后 quote 侧被翻转为 base
+                for side in ("base", "quote"):
+                    side_pools = [p for p, s in payload["pools"] if s == side]
+                    if not side_pools:
+                        continue
+                    data = json.dumps(
+                        {
+                            "network_id:pool_addresses": [
+                                f"{self.network}:{p}" for p in side_pools
+                            ],
+                            "interval": payload["interval"],
+                            "token": side,
+                            "action": "set_pools",
+                        }
+                    )
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "command": "message",
+                                "identifier": json.dumps({"channel": G3_CHANNEL}),
+                                "data": data,
+                            }
+                        )
+                    )
+                    await self._await_set_ack(ws)
+
+    async def _await_set_ack(self, ws) -> None:
+        try:
+            ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+        except asyncio.TimeoutError:
+            return
+        if isinstance(ack, dict) and ack.get("code") not in (2000,):
+            log.warning("WS %s set 确认异常: %s", self.network, ack)
 
     async def _serve(self, ws) -> None:
         while not self._stopped.is_set():

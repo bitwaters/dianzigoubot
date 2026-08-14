@@ -16,7 +16,7 @@ import yaml
 
 log = logging.getLogger(__name__)
 
-PLUGINS_DIR = Path("plugins")
+PLUGINS_DIR = Path(__file__).resolve().parents[3] / "plugins"
 SDK_VERSION = "1"
 
 
@@ -169,7 +169,9 @@ async def load_plugins(
         try:
             meta = _load_meta(plugin_dir)
             register_fn = _load_register(plugin_dir, name)
-            events.register_plugin(name)
+            events.register_plugin(
+                name, supported_schema_versions=meta.supported_event_schema_versions
+            )
             config = {}
             config_path = plugin_dir / "config.yaml"
             if config_path.exists():
@@ -193,6 +195,7 @@ async def load_plugins(
             log.info("插件已加载: %s v%s", name, meta.version)
         except Exception as exc:
             events.unregister_plugin(name)
+            commands.unregister_plugin(name)  # 清理注册残留，避免半加载状态
             log.error("插件 %s 加载失败，已跳过: %s", name, exc)
     return loaded
 

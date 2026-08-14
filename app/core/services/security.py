@@ -177,8 +177,9 @@ def evaluate_bsc(
         result.set("honeypot_cg", "UNKNOWN", "CONTRACT_CHANGE", f"value={honeypot!r}")
 
     # -- GoPlus 固定拒绝（第 5.4 节） --
-    _flag_result("open_source", goplus.is_open_source, result)
-    _flag_result("in_dex", goplus.is_in_dex, result)
+    # open_source/in_dex 语义反转："0"（未开源/未上 DEX）才是危险值
+    _flag_result("open_source", goplus.is_open_source, result, invert=True)
+    _flag_result("in_dex", goplus.is_in_dex, result, invert=True)
     _flag_result("honeypot_gp", goplus.is_honeypot, result)
     _flag_result("cannot_buy", goplus.cannot_buy, result)
     _flag_result("cannot_sell_all", goplus.cannot_sell_all, result)
@@ -287,6 +288,14 @@ def evaluate_bsc(
             (goplus.owner_percent or Decimal(0)),
         )
         * 100,
+    )
+    result.set_value(
+        "creator_owner_addresses",
+        [
+            a
+            for a in (goplus.creator_address, goplus.owner_address)
+            if a
+        ],
     )
 
     # -- 父风险级联（第 5.4 节字段规则） --
@@ -457,6 +466,10 @@ def evaluate_solana(
     result.set_value(
         "developer_or_creator_holding_pct",
         token_info.developer_holding_percentage,
+    )
+    result.set_value(
+        "creator_owner_addresses",
+        [token_info.developer_address] if token_info.developer_address else [],
     )
 
     result.recompute()

@@ -195,6 +195,21 @@ def parse_evm(token_address: str, raw: dict) -> EvmSecurity:
                 locked_detail=item.get("locked_detail") or [],
             )
         )
+    lp_holders = []
+    for item in raw.get("lp_holders") or []:
+        if not isinstance(item, dict):
+            raise GoPlusContractError("EVM lp_holders 条目类型错误")
+        lp_holders.append(
+            EvmHolder(
+                address=item.get("address"),
+                is_locked=_flag(item.get("is_locked")),
+                tag=item.get("tag"),
+                is_contract=_flag(item.get("is_contract")),
+                balance=_dec(item.get("balance")),
+                percent=_dec(item.get("percent")),
+                locked_detail=item.get("locked_detail") or [],
+            )
+        )
     dexes = []
     for item in raw.get("dex") or []:
         if not isinstance(item, dict):
@@ -250,7 +265,7 @@ def parse_evm(token_address: str, raw: dict) -> EvmSecurity:
         creator_percent=_dec(raw.get("creator_percent")),
         lp_holder_count=raw.get("lp_holder_count"),
         lp_total_supply=_dec(raw.get("lp_total_supply")),
-        lp_holders=holders,
+        lp_holders=lp_holders,
         dex=dexes,
     )
 

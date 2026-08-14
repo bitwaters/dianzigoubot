@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 
@@ -34,7 +35,7 @@ from app.core.services.strategy import SignalPipeline, StrategyActivationService
 from app.core.services.usage import RestConcurrencyGate, UsageService
 from app.core.storage.database import Database
 from app.core.storage.repository import Repository
-from app.core.clients.telegram import UpdatePoller, OutboxSender
+from app.core.clients.telegram import ConfirmationManager, UpdatePoller, OutboxSender
 
 log = logging.getLogger(__name__)
 
@@ -87,25 +88,35 @@ async def main() -> None:
 
         return handler
 
-    # G1 顶部池映射缓存（文档第 4.4 节：G1 事件触发映射解析）
-    top_pool_cache: dict[str, dict] = {}
+    # G1 顶部池映射缓存（文档第 4.4 节：G1 事件触发映射解析；键含 chain）
+    top_pool_cache: dict[tuple[str, str], dict] = {}
     top_pool_ttl_ms = 300_000
 
     def _g1_handler(chain):
         async def handler(event):
-            token = event.token_address
-            entry = top_pool_cache.get(token)
+            key = (chain, event.token_address)
+            entry = top_pool_cache.get(key)
             now = _now_ms()
             if entry is not None and now - entry["at"] < top_pool_ttl_ms:
                 return
+            if entry is not None and entry.get("retry_after") and now < entry["retry_after"]:
+                return  # 刷新失败退避，避免每事件重试消耗额度
             try:
                 pools = await cg.top_pools_by_token(
-                    chain, token, include="base_token,quote_token,dex"
+                    chain, event.token_address, include="base_token,quote_token,dex"
                 )
-                top_pool_cache[token] = {"at": now, "pools": pools}
-                log.info("G1 顶部池映射已刷新 %s %s (%d 池)", chain, token[:10], len(pools))
+                top_pool_cache[key] = {"at": now, "pools": pools}
+                log.info(
+                    "G1 顶部池映射已刷新 %s %s (%d 池)",
+                    chain, event.token_address[:10], len(pools),
+                )
             except Exception as exc:
-                log.warning("顶部池映射刷新失败 %s: %s", token[:10], exc)
+                top_pool_cache[key] = {
+                    "at": entry["at"] if entry else now,
+                    "pools": entry["pools"] if entry else [],
+                    "retry_after": now + 60_000,
+                }
+                log.warning("顶部池映射刷新失败 %s: %s", event.token_address[:10], exc)
 
         return handler
 
@@ -119,9 +130,19 @@ async def main() -> None:
         )
 
     bus = EventBus(repo, dispatch_timeout_seconds=settings.dispatch_timeout_seconds)
-    notify = NotifyAPI(repo)
+    notify = NotifyAPI(
+        repo,
+        target_resolver={
+            "admin": settings.telegram_admin_id,
+            "channel": settings.telegram_signal_chat_id,
+        },
+    )
     commands = CommandRegistry()
     admin = AdminService(repo)
+    # 插件熔断告警经通知 API 送达管理员
+    bus.on_notify = lambda payload: notify.send(
+        payload["text"], target="admin", priority=payload.get("priority", 0)
+    )
 
     usage = UsageService(
         key_provider=cg.key,
@@ -174,6 +195,10 @@ async def main() -> None:
             admin=admin,
             admin_chat_id=settings.telegram_admin_id,
             active_snapshot=(strategy_revision, strategy_hash),
+            top_pool_lookup=lambda c, t: [
+                p
+                for p in (top_pool_cache.get((c, t)) or {}).get("pools", [])
+            ],
         )
         discovery.on_pool = lambda pool, label, tpl, p=pipeline: _dispatch(p, pool, label)
         pipelines[chain] = pipeline
@@ -189,7 +214,8 @@ async def main() -> None:
                 for row in await repo.list_expired_signals(now):
                     await repo.invalidate_signal(row["signal_id"], "EXPIRED", invalidated_at=now)
                     await bus.publish_signal_invalidated(row["signal_id"])
-                # 用量账本周期性落库（api_usage 表，文档第 9.3 节）
+                # 用量账本周期性落库（api_usage 表，文档第 9.3 节）；
+                # 先落库 commit 成功后再 clear，避免崩溃丢计数
                 for interface, count in cg.usage.snapshot().items():
                     await repo.record_api_usage(
                         "REST", interface.replace("rest:", ""), attempts=count
@@ -197,6 +223,7 @@ async def main() -> None:
                 ws_total = cg.usage.ws_total()
                 if ws_total > 0:
                     await repo.record_api_usage("WS", "all", charged_responses=ws_total)
+                await repo.conn.commit()
                 cg.usage.clear()
 
                 state = capacity.state()
@@ -240,13 +267,28 @@ async def main() -> None:
                 updates = await bot.get_updates(offset=offset, timeout=timeout)
                 return [u.to_dict() for u in updates]
 
-            async def send_msg(chat_id, text):
-                message = await bot.send_message(chat_id=chat_id, text=text)
+            async def send_msg(chat_id, text, reply_markup=None):
+                kwargs = {}
+                if reply_markup:
+                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+                    kwargs["reply_markup"] = InlineKeyboardMarkup(
+                        [InlineKeyboardButton(**btn) for btn in reply_markup]
+                    )
+                message = await bot.send_message(
+                    chat_id=chat_id, text=text, **kwargs
+                )
                 return str(message.message_id)
 
             poller = UpdatePoller(repo, fetch_updates)
+            confirmations = ConfirmationManager(repo)
             poller.on_update = lambda update: _handle_update(
-                update, admin, commands, notify, settings.telegram_admin_id
+                update,
+                admin,
+                commands,
+                notify,
+                confirmations,
+                settings.telegram_admin_id,
             )
             sender = OutboxSender(repo, send_msg)
             await poller.start()
@@ -300,8 +342,31 @@ async def _handle_update(
     admin: AdminService,
     commands: CommandRegistry,
     notify: NotifyAPI,
+    confirmations: "ConfirmationManager",
     admin_id: int,
 ) -> None:
+    # 确认回调：confirm:<nonce> / cancel:<nonce>（文档第 8.3 节）
+    callback = update.get("callback_query")
+    if callback is not None:
+        message = callback.get("message") or {}
+        chat_id = int(message.get("chat", {}).get("id", 0))
+        from_user = callback.get("from") or {}
+        user_id = int(from_user.get("id", 0))
+        data = (callback.get("data") or "").strip()
+        if data.startswith("confirm:"):
+            payload = await confirmations.try_consume(
+                data[len("confirm:"):], admin_id=user_id, chat_id=chat_id
+            )
+            if payload is not None:
+                await _execute_plugin_command(commands, payload, notify)
+            else:
+                await notify.send("确认无效、已过期或已被使用", target="admin")
+        elif data.startswith("cancel:"):
+            nonce = data[len("cancel:"):]
+            if await confirmations.try_consume(nonce, admin_id=user_id, chat_id=chat_id) is not None:
+                await notify.send("已取消", target="admin")
+        return
+
     message = update.get("message") or {}
     from_user = message.get("from") or {}
     if int(from_user.get("id", 0)) != admin_id:
@@ -312,8 +377,30 @@ async def _handle_update(
     parts = text.split(maxsplit=1)
     command = parts[0].split("@")[0]
     args = parts[1] if len(parts) > 1 else ""
+    chat_id = int(message.get("chat", {}).get("id", 0))
     plugin_cmd = commands.get(command)
     if plugin_cmd is not None:
+        if plugin_cmd["requires_confirmation"]:
+            nonce = await confirmations.create(
+                admin_id=admin_id,
+                chat_id=chat_id,
+                update_id=int(update["update_id"]),
+                command=command,
+                args=args,
+                payload={"command": command, "args": args, "message": message},
+            )
+            markup = json.dumps(
+                [
+                    {"text": "确认", "callback_data": f"confirm:{nonce}"},
+                    {"text": "取消", "callback_data": f"cancel:{nonce}"},
+                ]
+            )
+            await notify.send(
+                f"⚠️ 高风险命令 {command} 需二次确认（60 秒内有效）",
+                target="admin",
+                markup=markup,
+            )
+            return
         try:
             await plugin_cmd["handler"](message)
             return
@@ -323,6 +410,21 @@ async def _handle_update(
     reply = await admin.handle(command, args)
     if reply:
         await notify.send(reply, target="admin")
+
+
+async def _execute_plugin_command(
+    commands: CommandRegistry, payload: dict, notify: NotifyAPI
+) -> None:
+    """确认通过后执行插件命令（文档第 8.3 节：确认消费与业务在同一事务语义内）。"""
+    plugin_cmd = commands.get(payload.get("command", ""))
+    if plugin_cmd is None:
+        await notify.send("命令已失效（插件可能被卸载）", target="admin")
+        return
+    try:
+        await plugin_cmd["handler"](payload.get("message") or {})
+    except Exception:
+        log.exception("插件命令执行异常: %s", payload.get("command"))
+        await notify.send("命令执行失败，详见日志", target="admin")
 
 
 def _now_ms() -> int:

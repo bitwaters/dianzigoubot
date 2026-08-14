@@ -74,15 +74,31 @@ class OutcomeTracker:
                         row["chain"], [row["pool_address"]], include_volume_breakdown=False
                     )
                 if not details:
-                    raise RuntimeError("决定池无返回")
+                    # 决定池无返回 → 撤池（可观测结果）
+                    await self._repo.insert_outcome_snapshot(
+                        signal_id=row["signal_id"],
+                        chain=row["chain"],
+                        token_address=row["token_address"],
+                        pool_address=row["pool_address"],
+                        horizon=horizon,
+                        price=None,
+                        price_high=None,
+                        price_low=None,
+                        liquidity_usd=None,
+                        pool_removed=True,
+                        completeness="COMPLETE",
+                    )
+                    return
                 detail = details[0]
                 price = str(detail.base_token_price_usd) if detail.base_token_price_usd is not None else None
-                # 区间高低点来自 1m 行情缓存（文档第 4.4.2 节）
+                # 区间高低点：信号发出 → 该窗口截止（文档第 4.4.2 节）
+                horizon_ms = HORIZONS[horizon] * 1000
+                window_end = int(row["created_at"]) + horizon_ms
                 high, low = await self._repo.aggregate_bars_range(
                     row["chain"],
                     row["pool_address"],
                     int(row["created_at"]),
-                    utc_now_ms(),
+                    window_end,
                 )
                 await self._repo.insert_outcome_snapshot(
                     signal_id=row["signal_id"],

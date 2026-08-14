@@ -86,13 +86,14 @@ class OutboxSender:
     def __init__(
         self,
         repo,
-        send_fn: Callable[[int, str], Awaitable[str]],
+        send_fn,
         *,
         retry_base_seconds: float = 5.0,
         retry_max_seconds: float = 300.0,
     ) -> None:
         self._repo = repo
-        self._send = send_fn  # async (chat_id, text) -> message_id
+        # async (chat_id, text, reply_markup: dict | None) -> message_id
+        self._send = send_fn
         self.retry_base_seconds = retry_base_seconds
         self.retry_max_seconds = retry_max_seconds
         self._task: asyncio.Task | None = None
@@ -143,9 +144,17 @@ class OutboxSender:
             signal = await self._repo.get_signal(row["parent_id"])
             if signal and int(signal["expires_at"]) < utc_now_ms():
                 text = f"⚠️ [已过期，仅通知]\n{text}"
+        markup = None
+        if row["markup"]:
+            try:
+                import json
+
+                markup = json.loads(row["markup"])
+            except Exception:
+                log.warning("outbox markup 解析失败 %s", delivery_key)
         await self._repo.update_outbox_status(delivery_key, "SENDING")
         try:
-            message_id = await self._send(chat_id, text)
+            message_id = await self._send(chat_id, text, markup)
             await self._repo.update_outbox_status(
                 delivery_key, "SENT", telegram_message_id=message_id
             )

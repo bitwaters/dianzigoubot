@@ -414,6 +414,7 @@ class SignalPipeline:
         admin,
         admin_chat_id: int,
         active_snapshot,
+        top_pool_lookup=None,
     ) -> None:
         self.chain = chain
         self.strategy = strategy
@@ -427,6 +428,7 @@ class SignalPipeline:
         self._admin = admin
         self._admin_chat = admin_chat_id
         self._active = active_snapshot  # (revision, hash)
+        self._top_pool_lookup = top_pool_lookup  # (chain, token) -> list[PoolAttributes]
 
     async def handle_pool(self, pool, label) -> None:
         """发现回调：深查 → 安全 → G3 FOCUS → 评分 → 信号。"""
@@ -434,10 +436,24 @@ class SignalPipeline:
             return
         if not (pool.base_token_address and pool.address):
             return
-        if not self._trusted_quote(pool):
-            return  # 文档第 4.4 节：无可信报价资产池仅观察
         token = pool.base_token_address
-        candidate_pools = [pool.address]
+
+        # 决定池选择：发现池须命中可信报价；否则尝试 G1 顶部池映射（文档第 4.4 节）
+        candidate = pool
+        if not self._trusted_quote(pool) and self._top_pool_lookup is not None:
+            try:
+                mapped = self._top_pool_lookup(self.chain, token)
+            except Exception:
+                mapped = []
+            candidate = next(
+                (p for p in mapped if self._trusted_quote(p) and p.address),
+                None,
+            )
+        if candidate is None or not self._trusted_quote(candidate):
+            return  # 文档第 4.4 节：无可信报价资产池仅观察
+
+        pool_address = candidate.address
+        candidate_pools = [pool_address]
 
         result = await self._pipeline.deep_check(token, candidate_pools)
         if result.errors.get("token_info"):
@@ -445,101 +461,172 @@ class SignalPipeline:
         if result.security is None or not result.security.passed:
             return
 
-        # G3 FOCUS（最长 focus_seconds_max）
+        # G3 FOCUS（最长 focus_seconds_max）；防追高等待期间保持订阅
         focus_ms = self.strategy.collection.websocket.focus_seconds_max * 1000
-        added = self._ws.add_g3_pool(pool.address, "base")
+        added = self._ws.add_g3_pool(pool_address, "base")
         if not added:
             return
-        deadline = utc_now_ms() + focus_ms
-        while utc_now_ms() < deadline:
-            window = self._candles.window(pool.address, "base", 10)
-            if window is not None:
-                break
-            await asyncio.sleep(0.25)
-        self._ws.remove_g3_pool(pool.address, "base")
-        window = self._candles.window(pool.address, "base", 10)
-        if window is None:
-            return  # INCOMPLETE：缺秒或不足 10 根
-
-        # 两份快照本地接收时间相隔至少 10 秒（文档第 4.4 节）
-        if result.first_snapshot_at_ms is not None:
-            wait_ms = result.first_snapshot_at_ms + 10_000 - utc_now_ms()
-            if wait_ms > 0:
-                await asyncio.sleep(wait_ms / 1000)
-
-        # 第二份聚合快照
         try:
-            details = await self._cg.pools_multi(
-                self.chain, candidate_pools, include_volume_breakdown=True
+            deadline = utc_now_ms() + focus_ms
+            window = None
+            while utc_now_ms() < deadline:
+                window = self._candles.window(pool_address, "base", 10)
+                if window is not None:
+                    break
+                await asyncio.sleep(0.25)
+            if window is None:
+                return  # INCOMPLETE：缺秒或不足 10 根
+
+            # 两份快照本地接收时间相隔至少 10 秒（文档第 4.4 节）
+            if result.first_snapshot_at_ms is not None:
+                wait_ms = result.first_snapshot_at_ms + 10_000 - utc_now_ms()
+                if wait_ms > 0:
+                    await asyncio.sleep(wait_ms / 1000)
+
+            # 第二份聚合快照
+            try:
+                details = await self._cg.pools_multi(
+                    self.chain, candidate_pools, include_volume_breakdown=True
+                )
+            except Exception as exc:
+                log.warning("第二份快照失败 %s: %s", token, exc)
+                return
+            detail = next((d for d in details if d.address == pool_address), None)
+            if detail is None or detail.reserve_in_usd is None:
+                return
+
+            snapshot = self._build_snapshot(token, pool_address, window, detail, result)
+            snapshot.smart = await self._eval_smart_money(token, pool_address, detail, result)
+            features = compute_features(snapshot)
+            scoring = score(features, self.strategy)
+            if scoring.rejected:
+                return
+
+            # 防追高：初始窗口判定；触发等待后保持订阅续评至 max_wait_seconds
+            anti = anti_chase_check(window, window, self.strategy.anti_chase)
+            if anti.wait_triggered and not anti.allowed:
+                wait_deadline = utc_now_ms() + self.strategy.anti_chase.max_wait_seconds * 1000
+                while utc_now_ms() < wait_deadline:
+                    await asyncio.sleep(0.25)
+                    wait_bars = self._candles.final_bars(pool_address, "base")
+                    anti = anti_chase_check(window, wait_bars, self.strategy.anti_chase)
+                    if anti.allowed:
+                        break
+            if not anti.allowed:
+                return
+
+            level = signal_level(scoring, self.strategy)
+            state = await self._load_state(token)
+            decision = evaluate_candidate(
+                state,
+                now_ms=utc_now_ms(),
+                total_score=scoring.total_score,
+                level=level,
+                anti_allowed=anti.allowed,
+                security_passed=True,
+                config=self.strategy,
+            )
+            await self._save_state(token, pool_address, decision.state)
+            if not decision.emit_signal:
+                return
+
+            # PRE_EXECUTION_CHECK（120 秒快照；主池随检查传递，Top10 排除 LP 池）
+            pre_exec = await self._pipeline._security_check(
+                token,
+                result.token_info,
+                result.holders,
+                kind="PRE_EXECUTION_CHECK",
+                main_pool_address=pool_address,
+            )
+            if pre_exec is None or not pre_exec.passed:
+                return
+            signal_id = await create_signal(
+                self._repo,
+                chain=self.chain,
+                token_address=token,
+                pool_address=pool_address,
+                signal_level_value="BUY",
+                scoring=scoring,
+                features=features,
+                reference_price=window[-1].close,
+                anti=anti,
+                security=result.security,
+                pre_execution=pre_exec,
+                smart=SmartMoneyEval(snapshot=snapshot.smart, sell_blocked=False),
+                generation=decision.state.generation,
+                strategy_revision=self._active[0],
+                strategy_hash=self._active[1],
+                validity_seconds=self.strategy.signals.validity_seconds,
+                now_ms=utc_now_ms(),
+            )
+            await self._bus.publish_signal_created(signal_id)
+            # Telegram 买入信号（kind=BUY_SIGNAL 供过期标记使用）
+            row = await self._repo.get_signal(signal_id)
+            text = _signal_text(row)
+            await self._repo.insert_outbox(
+                delivery_key=f"sig:{signal_id}",
+                kind="BUY_SIGNAL",
+                parent_id=signal_id,
+                chat_target=str(self._admin_chat),
+                text=text,
+            )
+        finally:
+            self._ws.remove_g3_pool(pool_address, "base")
+
+    async def _eval_smart_money(
+        self, token: str, pool_address: str, detail, result
+    ) -> SmartMoneySnapshot:
+        """聪明钱 v1（文档第 4.4.1 节）：TOKEN_PROFITABLE 分类与净买入。"""
+        try:
+            traders = await self._cg.top_traders(self.chain, token, traders=20)
+            trades = await self._cg.pool_trades(
+                self.chain, pool_address, token=token
             )
         except Exception as exc:
-            log.warning("第二份快照失败 %s: %s", token, exc)
-            return
-        detail = next((d for d in details if d.address == pool.address), None)
-        if detail is None or detail.reserve_in_usd is None:
-            return
+            log.warning("聪明钱取证失败 %s: %s", token, exc)
+            return SmartMoneySnapshot(complete=False)
 
-        snapshot = self._build_snapshot(token, pool.address, window, detail, result)
-        features = compute_features(snapshot)
-        scoring = score(features, self.strategy)
-        if scoring.rejected:
-            return
-        anti = anti_chase_check(window, window, self.strategy.anti_chase)
-        level = signal_level(scoring, self.strategy)
-        state = await self._load_state(token)
-        decision = evaluate_candidate(
-            state,
-            now_ms=utc_now_ms(),
-            total_score=scoring.total_score,
-            level=level,
-            anti_allowed=anti.allowed,
-            security_passed=True,
-            config=self.strategy,
-        )
-        await self._save_state(token, pool.address, decision.state)
-        if not decision.emit_signal:
-            return
+        values = result.security.values if result.security else {}
+        exclude = set(values.get("creator_owner_addresses") or [])
+        exclude.add(pool_address)
+        if self.chain == "bsc":
+            exclude = {a.lower() for a in exclude}
+        profitable = {
+            t.address
+            for t in traders.traders
+            if t.realized_pnl_usd is not None and t.realized_pnl_usd > 0
+        }
+        norm = str.lower if self.chain == "bsc" else (lambda a: a)
+        profitable = {a for a in profitable if norm(a) not in exclude}
 
-        # PRE_EXECUTION_CHECK（120 秒快照；主池随检查传递，Top10 排除 LP 池）
-        pre_exec = await self._pipeline._security_check(
-            token,
-            result.token_info,
-            result.holders,
-            kind="PRE_EXECUTION_CHECK",
-            main_pool_address=pool.address,
+        window_seconds = self.strategy.smart_money.recent_trade_window_seconds
+        cutoff_ms = utc_now_ms() - window_seconds * 1000
+        trade_dicts = []
+        for trade in trades:
+            if trade.block_timestamp_ms is None or trade.block_timestamp_ms < cutoff_ms:
+                continue
+            trade_dicts.append(
+                {
+                    "tx_from_address": trade.tx_from_address,
+                    "kind": trade.kind,
+                    "volume_in_usd": str(trade.volume_in_usd)
+                    if trade.volume_in_usd is not None
+                    else None,
+                }
+            )
+        volume_5m = detail.volume_usd.get("m5") or Decimal(0)
+        evaluated = eval_smart_money(
+            token_profitable_wallets=profitable,
+            local_smart_wallets=set(),  # v1：LOCAL_SMART 未启用
+            trades=trade_dicts,
+            recent_window_seconds=window_seconds,
+            volume_5m_usd=volume_5m,
+            min_confirming_wallets=self.strategy.smart_money.min_confirming_wallets,
+            sell_block_net_volume_pct_min=(
+                self.strategy.smart_money.sell_block_net_volume_pct_min
+            ),
         )
-        if pre_exec is None or not pre_exec.passed:
-            return
-        signal_id = await create_signal(
-            self._repo,
-            chain=self.chain,
-            token_address=token,
-            pool_address=pool.address,
-            signal_level_value="BUY",
-            scoring=scoring,
-            features=features,
-            reference_price=window[-1].close,
-            anti=anti,
-            security=result.security,
-            pre_execution=pre_exec,
-            smart=SmartMoneyEval(snapshot=snapshot.smart),
-            generation=decision.state.generation,
-            strategy_revision=self._active[0],
-            strategy_hash=self._active[1],
-            validity_seconds=self.strategy.signals.validity_seconds,
-            now_ms=utc_now_ms(),
-        )
-        await self._bus.publish_signal_created(signal_id)
-        # Telegram 买入信号（kind=BUY_SIGNAL 供过期标记使用）
-        row = await self._repo.get_signal(signal_id)
-        text = _signal_text(row)
-        await self._repo.insert_outbox(
-            delivery_key=f"sig:{signal_id}",
-            kind="BUY_SIGNAL",
-            parent_id=signal_id,
-            chat_target=str(self._admin_chat),
-            text=text,
-        )
+        return evaluated.snapshot
 
     def _trusted_quote(self, pool) -> bool:
         """可信报价资产门禁：base/quote 任一侧命中该链 trusted_quote_assets（文档第 4.4 节）。"""
@@ -596,7 +683,7 @@ class SignalPipeline:
             setup_started_at=row["setup_started_at"],
             generation=int(row["signal_generation"]),
             generation_signal_emitted=(row["status"] == "SIGNAL"),
-            below_setup_since=None,
+            below_setup_since=row["below_setup_since"],
         )
 
     async def _save_state(self, token: str, pool_address: str, state: CandidateRuntime) -> None:
@@ -607,6 +694,7 @@ class SignalPipeline:
             status=state.status,
             signal_generation=state.generation,
             setup_started_at=state.setup_started_at,
+            below_setup_since=state.below_setup_since,
         )
 
 
@@ -765,9 +853,9 @@ import uuid as _uuid
 from app.core.services.security import SecurityResult  # noqa: E402
 
 
-def _dec_str(value) -> str:
+def _dec_str(value):
     if value is None:
-        return ""
+        return None  # 缺失特征序列化为 null（回放解析兼容）
     return str(value)
 
 

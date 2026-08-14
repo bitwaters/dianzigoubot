@@ -180,3 +180,19 @@ class TestAdmission:
         client = CoinGeckoWS("k", "solana", credit_gate=gate)
         gate.charge(3)
         assert client.add_g3_pool("P1", "base") is False
+
+    def test_day_rollover(self):
+        """P2 修复：UTC 跨日后预算重置，无需重启。"""
+        gate = DailyCreditGate(Decimal("3"))
+        gate.charge(3)
+        assert gate.available is False
+        gate._day -= 1  # 模拟跨日
+        assert gate.available is True
+        assert gate.used == 0
+
+    def test_set_g3_pools_capped(self):
+        gate = DailyCreditGate(Decimal("999999"))
+        client = CoinGeckoWS("k", "solana", credit_gate=gate)
+        pools = {(f"P{i}", "base") for i in range(150)}
+        client.set_g3_pools(pools)
+        assert len(client._g3_pools) == 100

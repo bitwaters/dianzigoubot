@@ -98,6 +98,7 @@ class Repository:
         total_score: str | None = None,
         strategy_revision: str | None = None,
         expires_at: int | None = None,
+        below_setup_since: int | None = None,
     ) -> None:
         if status not in CANDIDATE_STATUSES:
             raise ValueError(f"非法候选状态: {status}")
@@ -106,8 +107,9 @@ class Repository:
             """INSERT INTO candidates (chain, token_address, pool_address, status,
                                        status_reason, trade_allowed, labels, main_label,
                                        signal_generation, setup_started_at, total_score,
-                                       strategy_revision, created_at, updated_at, expires_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       strategy_revision, created_at, updated_at, expires_at,
+                                       below_setup_since)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(chain, token_address) DO UPDATE SET
                    pool_address = excluded.pool_address,
                    status = excluded.status,
@@ -120,7 +122,8 @@ class Repository:
                    total_score = excluded.total_score,
                    strategy_revision = excluded.strategy_revision,
                    updated_at = excluded.updated_at,
-                   expires_at = excluded.expires_at""",
+                   expires_at = excluded.expires_at,
+                   below_setup_since = excluded.below_setup_since""",
             (
                 chain,
                 token_address,
@@ -137,6 +140,7 @@ class Repository:
                 now,
                 now,
                 expires_at,
+                below_setup_since,
             ),
         )
 
@@ -334,15 +338,17 @@ class Repository:
         chat_target: str,
         text: str,
         priority: int = 0,
+        markup: str | None = None,
         now_ms: int | None = None,
     ) -> None:
         now = now_ms or utc_now_ms()
         await self._conn.execute(
             """INSERT INTO telegram_outbox (delivery_key, kind, parent_id,
                                             chat_target, text, status,
-                                            retry_count, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)""",
-            (delivery_key, kind, parent_id, chat_target, text, now, now),
+                                            retry_count, created_at, updated_at,
+                                            markup)
+               VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?)""",
+            (delivery_key, kind, parent_id, chat_target, text, now, now, markup),
         )
 
     async def get_outbox(self, delivery_key: str) -> aiosqlite.Row | None:
@@ -548,15 +554,18 @@ class Repository:
         return await cursor.fetchone()
 
     async def list_due_outcomes(self, now_ms: int, limit: int = 100) -> list[aiosqlite.Row]:
-        """到期未采集的结果标签计划：信号发出时间 + horizon 已过且无对应快照。"""
+        """到期未采集的结果标签计划。
+
+        只按最早窗口（15m）筛选"可能到期"的信号；各窗口是否已采集由
+        OutcomeTracker 逐窗口检查（get_outcome_snapshot），避免已有 15m
+        快照的信号被 LEFT JOIN 过滤掉 1h/6h/24h 标签。
+        """
         cursor = await self._conn.execute(
-            """SELECT s.signal_id, s.chain, s.token_address, s.pool_address,
-                      s.created_at, o.horizon
-               FROM signals s
-               LEFT JOIN outcome_snapshots o ON o.signal_id = s.signal_id
-               WHERE o.horizon IS NULL
-               ORDER BY s.created_at LIMIT ?""",
-            (limit,),
+            """SELECT signal_id, chain, token_address, pool_address, created_at
+               FROM signals
+               WHERE created_at <= ? - 900000
+               ORDER BY created_at LIMIT ?""",
+            (now_ms, limit),
         )
         return list(await cursor.fetchall())
 

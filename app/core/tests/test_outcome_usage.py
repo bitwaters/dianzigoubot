@@ -95,6 +95,25 @@ class TestOutcomeTracker:
         assert await tracker.run_due(now) == 4
         await db.close()
 
+    async def test_partial_signal_completed_later(self, db_path):
+        """P2 修复：已有 15m 快照的信号，1h/6h/24h 标签必须继续采集。"""
+        db = await _open(db_path)
+        repo = Repository(db.conn)
+        await _make_signal(repo, "s1", created_at=1_000_000)
+        tracker = OutcomeTracker(repo, FakeCG(), RestConcurrencyGate(4))
+        # 15m 时刻只采 15m
+        now_15m = 1_000_000 + HORIZONS["15m"] * 1000 + 1
+        assert await tracker.run_due(now_15m) == 1
+        assert await repo.get_outcome_snapshot("s1", "15m") is not None
+        # 1h 时刻：15m 已存在，1h 到期 → 继续采集 1h
+        now_1h = 1_000_000 + HORIZONS["1h"] * 1000 + 1
+        assert await tracker.run_due(now_1h) == 1
+        assert await repo.get_outcome_snapshot("s1", "1h") is not None
+        # 24h 时刻：补全剩余 6h/24h
+        now_24h = 1_000_000 + HORIZONS["24h"] * 1000 + 1
+        assert await tracker.run_due(now_24h) == 2
+        await db.close()
+
     async def test_data_gap_after_retry(self, db_path):
         db = await _open(db_path)
         repo = Repository(db.conn)

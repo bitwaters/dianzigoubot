@@ -239,6 +239,50 @@ class TestSecurityBsc:
         assert result.fields["lp_locked_pct"].status == "UNKNOWN"  # 无主池
         assert result.trade_allowed is False
 
+    def test_normal_token_open_source_semantics(self):
+        """P1 修复正例：开源 + 已上 DEX 的正常代币，"1" 必须判 SAFE（文档 §5.4 "0 拒绝"）。"""
+        from app.core.clients.coingecko import TokenInfo
+        from app.core.clients.goplus import EvmSecurity
+
+        goplus = EvmSecurity(
+            token_address="0xNORMAL",
+            is_open_source="1",
+            is_in_dex="1",
+            is_honeypot="0",
+            cannot_buy="0",
+            cannot_sell_all="0",
+            buy_tax=Decimal("0"),
+            sell_tax=Decimal("0"),
+            transfer_tax=Decimal("0"),
+            slippage_modifiable="0",
+            is_blacklisted="0",
+            is_whitelisted="0",
+            is_mintable="0",
+            transfer_pausable="0",
+            is_anti_whale="0",
+            anti_whale_modifiable="0",
+            trading_cooldown="0",
+            hidden_owner="0",
+            can_take_back_ownership="0",
+            selfdestruct="0",
+            external_call="0",
+            owner_change_balance="0",
+            creator_percent=Decimal("0.02"),
+            owner_percent=Decimal("0"),
+        )
+        token_info = TokenInfo(address="0xNORMAL", gt_score=Decimal("90"), is_honeypot=False)
+        result = evaluate_bsc(
+            token_info=token_info,
+            goplus=goplus,
+            security_cfg=STRATEGY.bsc.security,
+            main_pool_address="0xPOOL",
+            coin_holders=None,
+        )
+        assert result.fields["open_source"].status == "SAFE"
+        assert result.fields["in_dex"].status == "SAFE"
+        # LP 锁仓缺数据仍为 UNKNOWN（主池未匹配），但语义不再因 open_source 反转误杀
+        assert result.fields["lp_locked_pct"].status == "UNKNOWN"
+
 
 class TestTop10:
     def test_burn_excluded(self):

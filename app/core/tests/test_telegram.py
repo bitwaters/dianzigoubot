@@ -142,7 +142,7 @@ class TestOutbox:
         )
         sent = []
 
-        async def send(chat_id, text):
+        async def send(chat_id, text, reply_markup=None):
             sent.append((chat_id, text))
             return "mid-1"
 
@@ -167,7 +167,7 @@ class TestOutbox:
         )
         attempts = []
 
-        async def send(chat_id, text):
+        async def send(chat_id, text, reply_markup=None):
             attempts.append(1)
             if len(attempts) < 2:
                 raise RuntimeError("boom")
@@ -197,7 +197,7 @@ class TestOutbox:
         )
         sent = []
 
-        async def send(chat_id, text):
+        async def send(chat_id, text, reply_markup=None):
             sent.append(text)
 
         sender = OutboxSender(repo, send)
@@ -220,7 +220,7 @@ class TestOutbox:
         )
         await repo.update_outbox_status("k1", "SENDING")
         # 启动恢复：SENDING → DELIVERY_UNKNOWN，不自动补发
-        sender = OutboxSender(repo, lambda c, t: "mid")
+        sender = OutboxSender(repo, lambda c, t, m=None: "mid")
         await sender.start()
         await asyncio.sleep(0.05)
         await sender.stop()

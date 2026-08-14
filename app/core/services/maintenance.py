@@ -18,7 +18,6 @@ RETENTION = {
     "security_checks": 30 * 24 * 3600,  # 安全快照 30 天
     "signals": 180 * 24 * 3600,         # 信号 180 天
     "telegram_updates": 90 * 24 * 3600,  # update 明细 90 天
-    "telegram_outbox": 90 * 24 * 3600,   # 普通通知确定终态 90 天
     "api_usage": 30 * 24 * 3600,         # 明细 30 天（汇总保留 1 年，v1 直接汇总）
     "discovery_snapshots": 30 * 24 * 3600,
     "candidates": 30 * 24 * 3600,
@@ -28,6 +27,8 @@ TIME_COLUMN = {
     "market_bars": "candle_timestamp",
     "telegram_updates": "processed_at",
 }
+
+OUTBOX_TERMINAL_RETENTION = 90 * 24 * 3600  # 普通通知确定终态 90 天
 
 
 class CapacityManager:
@@ -83,7 +84,7 @@ class RetentionCleaner:
 
     async def cleanup_outbox_terminal(self, now_ms: int) -> int:
         """outbox 确定终态清理：SENT/FAILED 超过 90 天，且不触碰 PENDING/SENDING/DELIVERY_UNKNOWN。"""
-        cutoff = now_ms - RETENTION["telegram_outbox"] * 1000
+        cutoff = now_ms - OUTBOX_TERMINAL_RETENTION * 1000
         cursor = await self._repo.conn.execute(
             """DELETE FROM telegram_outbox
                WHERE status IN ('SENT', 'FAILED') AND updated_at < ?""",

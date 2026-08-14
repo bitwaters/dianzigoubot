@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -222,12 +223,22 @@ class CandidatePipeline:
         self.cg = cg
         self.gp = gp
         self.repo = repo
+        self._cache: dict[str, tuple[int, DeepCheckResult]] = {}
+
+    def _cache_ttl_ms(self) -> int:
+        return self.strategy.discovery.rest_refresh_seconds * 1000
 
     async def deep_check(
         self,
         token_address: str,
         candidate_pool_addresses: list[str],
     ) -> DeepCheckResult:
+        # 同一实体在 TTL 内复用缓存（文档第 4.4 节），避免每轮全量深查
+        now = utc_now_ms()
+        cached = self._cache.get(token_address)
+        if cached is not None and now - cached[0] < self._cache_ttl_ms():
+            return cached[1]
+
         result = DeepCheckResult(chain=self.chain, token_address=token_address)
 
         # 1. Token Info
@@ -274,6 +285,7 @@ class CandidatePipeline:
         await _persist_security(self.repo, self.chain, token_address, result)
 
         result.completed = True
+        self._cache[token_address] = (utc_now_ms(), result)
         return result
 
     async def _security_check(
@@ -292,8 +304,19 @@ class CandidatePipeline:
             if row is not None and row["status"] == "PASS":
                 age = (utc_now_ms() - int(row["created_at"])) / 1000
                 if age <= PRE_MONITOR_TTL_SECONDS:
+                    # 缓存命中：从 details 重建结构化数值（top10/lp/dev），
+                    # 否则 holding_distribution 维度系统性失分
                     cached = SecurityResult(trade_allowed=True)
                     cached.set("cached_pass", "SAFE")
+                    try:
+                        details = json.loads(row["details"] or "{}")
+                        for name, value in (details.get("values") or {}).items():
+                            cached.set_value(
+                                name,
+                                Decimal(str(value)) if value is not None else None,
+                            )
+                    except Exception:
+                        log.warning("安全缓存 values 解析失败 %s", token_address)
                     return cached
 
         try:
@@ -443,17 +466,24 @@ async def _persist_security(
     repo: Repository, chain: str, token_address: str, result: "DeepCheckResult"
 ) -> None:
     status = "PASS" if (result.security and result.security.passed) else "RISK"
+    details = {
+        "fields": {
+            k: v.status
+            for k, v in (result.security.fields.items() if result.security else [])
+        },
+        "values": {
+            k: str(v) if v is not None else None
+            for k, v in (
+                result.security.values.items() if result.security else []
+            )
+        },
+    }
     await repo.insert_security_check(
         chain,
         token_address,
         "PRE_MONITOR_CHECK",
         status,
-        details={
-            "fields": {
-                k: v.status
-                for k, v in (result.security.fields.items() if result.security else [])
-            }
-        },
+        details=details,
         expires_at=utc_now_ms() + PRE_MONITOR_TTL_SECONDS * 1000,
     )
 
