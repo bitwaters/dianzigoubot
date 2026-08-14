@@ -264,6 +264,8 @@ async def main() -> None:
                     log.warning("容量 90%%：停止新信号")
                 elif state == "STOP_BACKFILL":
                     log.warning("容量 80%%：停止历史回补")
+                for chain in ("solana", "bsc"):
+                    log.info("管线统计 %s: %s", chain, pipelines[chain].stages)
                 await cleaner.run(now)
                 await cleaner.cleanup_outbox_terminal(now)
                 await repo.conn.commit()

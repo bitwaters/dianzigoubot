@@ -584,6 +584,17 @@ class SignalPipeline:
             entry = next(e for e in scored if e[0] == chosen)
             pool_address, window, detail, snapshot, scoring = entry
 
+            # 存活者诊断日志（通过安全+市场质量+G3 的候选）
+            if scoring.total_score >= self.strategy.scoring.watch_score_min:
+                log.info(
+                    "评分 %s %s 池=%s: 总分=%s 维度=%s",
+                    self.chain,
+                    token[:10],
+                    pool_address[:10],
+                    scoring.total_score,
+                    {k: str(v) for k, v in scoring.dimension_scores.items()},
+                )
+
             # 7. 防追高：决定池判定；触发等待后保持订阅续评至 max_wait_seconds
             anti = anti_chase_check(window, window, self.strategy.anti_chase)
             if anti.wait_triggered and not anti.allowed:
