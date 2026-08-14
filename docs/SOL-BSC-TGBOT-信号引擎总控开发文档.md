@@ -251,7 +251,7 @@ Pool Trades 返回少于 `trade_response_limit` 条时，最近窗口为 `COMPLE
 - 在信号发出后 15m、1h、6h、24h 四个定点，用 Multiple Pools 查询决定池，记录价格、区间高低点、流动性与池状态到 `outcome_snapshots`。
 - 结果追踪 MUST NOT 占用 G1/G3 订阅；每次查询遵循第 4.6 节的 REST 并发上限。
 - 定点查询失败时最多补洞重试一次；连续失败记为该标签的数据缺口。
-- `simple token_price` 作为降成本替代：**实现期第一个 spike 优先验证其批量上限与价格字段语义**，契约测试通过后切换；验证通过前固定使用 Multiple Pools。
+- spike 结论已锁定（2026-08-14 实测）：`simple token_price` 只返回价格，不含流动性与池状态，不满足结果标签需求；结果追踪固定使用 Multiple Pools。
 - 历史 OHLCV 回补与结果标签的关系见第 10 章。
 
 ### 4.5 WebSocket 使用
@@ -1021,6 +1021,9 @@ app/core/
 │   ├── security.py
 │   ├── wallet_intelligence.py
 │   ├── strategy.py
+│   ├── outcome_tracking.py
+│   ├── usage.py
+│   ├── admin.py
 │   └── maintenance.py
 ├── bus/
 │   ├── events.py

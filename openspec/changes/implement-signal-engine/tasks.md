@@ -56,9 +56,9 @@
 
 ### 8. Telegram
 
-- [ ] 8.1 Long Polling：`telegram_updates` offset 持久化与恢复、update 去重
-- [ ] 8.2 `telegram_outbox`：delivery_key 幂等、PENDING 补发、SENDING→DELIVERY_UNKNOWN 恢复、过期信号"仅通知"标记
-- [ ] 8.3 一次性确认 nonce（60 秒、绑定参数、同事务消费）与核心命令集（文档第 8.2 节）
+- [x] 8.1 Long Polling：`telegram_updates` offset 持久化与恢复、update 去重
+- [x] 8.2 `telegram_outbox`：delivery_key 幂等、PENDING 补发、SENDING→DELIVERY_UNKNOWN 恢复、过期信号"仅通知"标记
+- [x] 8.3 一次性确认 nonce（60 秒、绑定参数、同事务消费）与核心命令集（文档第 8.2 节）
 
 ### 9. 结果追踪与用量控制
 

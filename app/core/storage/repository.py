@@ -463,6 +463,73 @@ class Repository:
         )
         return cursor.rowcount > 0
 
+    # -- outcome_snapshots（结果标签，文档第 4.4.2 节） ----------------------
+
+    async def insert_outcome_snapshot(
+        self,
+        *,
+        signal_id: str,
+        chain: str,
+        token_address: str,
+        pool_address: str,
+        horizon: str,
+        price: str | None,
+        price_high: str | None,
+        price_low: str | None,
+        liquidity_usd: str | None,
+        pool_removed: bool,
+        completeness: str,
+    ) -> None:
+        await self._conn.execute(
+            """INSERT INTO outcome_snapshots
+               (signal_id, chain, token_address, pool_address, horizon,
+                price, price_high, price_low, liquidity_usd, pool_removed,
+                completeness, captured_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(signal_id, horizon) DO UPDATE SET
+                   price = excluded.price,
+                   price_high = excluded.price_high,
+                   price_low = excluded.price_low,
+                   liquidity_usd = excluded.liquidity_usd,
+                   pool_removed = excluded.pool_removed,
+                   completeness = excluded.completeness,
+                   captured_at = excluded.captured_at""",
+            (
+                signal_id,
+                chain,
+                token_address,
+                pool_address,
+                horizon,
+                price,
+                price_high,
+                price_low,
+                liquidity_usd,
+                int(pool_removed),
+                completeness,
+                utc_now_ms(),
+            ),
+        )
+
+    async def get_outcome_snapshot(self, signal_id: str, horizon: str) -> aiosqlite.Row | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM outcome_snapshots WHERE signal_id = ? AND horizon = ?",
+            (signal_id, horizon),
+        )
+        return await cursor.fetchone()
+
+    async def list_due_outcomes(self, now_ms: int, limit: int = 100) -> list[aiosqlite.Row]:
+        """到期未采集的结果标签计划：信号发出时间 + horizon 已过且无对应快照。"""
+        cursor = await self._conn.execute(
+            """SELECT s.signal_id, s.chain, s.token_address, s.pool_address,
+                      s.created_at, o.horizon
+               FROM signals s
+               LEFT JOIN outcome_snapshots o ON o.signal_id = s.signal_id
+               WHERE o.horizon IS NULL
+               ORDER BY s.created_at LIMIT ?""",
+            (limit,),
+        )
+        return list(await cursor.fetchall())
+
     # -- api_usage ----------------------------------------------------------
 
     async def record_api_usage(

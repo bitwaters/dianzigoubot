@@ -208,6 +208,8 @@ class PoolDetail(NormalizedModel):
     market_cap_usd: Decimal | None = None
     reserve_in_usd: Decimal | None = None
     locked_liquidity_percentage: Decimal | None = None
+    base_token_price_usd: Decimal | None = None
+    quote_token_price_usd: Decimal | None = None
     price_change_pct: dict[str, Decimal] = Field(default_factory=dict)
     transactions: dict[str, TxBucket] = Field(default_factory=dict)
     volume_usd: dict[str, Decimal] = Field(default_factory=dict)
@@ -266,6 +268,8 @@ class PoolDetailBuilder:
             locked_liquidity_percentage=_to_decimal(
                 attributes.get("locked_liquidity_percentage")
             ),
+            base_token_price_usd=_to_decimal(attributes.get("base_token_price_usd")),
+            quote_token_price_usd=_to_decimal(attributes.get("quote_token_price_usd")),
             price_change_pct=_table("price_change_percentage"),
             transactions={"m5": _bucket("m5"), "m15": _bucket("m15")},
             volume_usd=_table("volume_usd"),
