@@ -24,6 +24,7 @@ from app.core.clients.goplus import GoPlusClient
 from app.core.config import (
     Settings,
     StrategyFile,
+    StrategyHolder,
     load_plugins_config,
     load_strategy_file,
     setup_logging,
@@ -63,6 +64,7 @@ async def main() -> None:
         active = await activation.current_active()
         log.info("基准策略已激活: %s", active["revision"])
     strategy = StrategyFile.model_validate(json.loads(active["canonical"]))
+    strategy_holder = StrategyHolder(strategy)
     strategy_hash = active["strategy_hash"]
     strategy_revision = active["revision"]
     log.info("运行策略: %s (%s)", strategy_revision, strategy_hash[:8])
@@ -153,6 +155,7 @@ async def main() -> None:
         alert_threshold=int(os.environ.get("CREDIT_ALERT_THRESHOLD", "100000")),
     )
     core = CoreActions(repo, activation, settings, cg, settings.strategy_path)
+    core.strategy_holder = strategy_holder  # 激活/回退后热替换（文档第 10.6 节）
     admin.register("/budget", lambda args: _budget_lines(usage))
     admin.register("/strategy", core.strategy_command)
     admin.register("/telegram", core.telegram_command)
@@ -212,17 +215,17 @@ async def main() -> None:
     pipelines: dict[str, SignalPipeline] = {}
     for chain in ("solana", "bsc"):
         chain_strategy = getattr(strategy, chain)
-        scheduler = TemplateScheduler(chain, chain_strategy.collection, repo)
-        discovery = DiscoveryTask(chain, chain_strategy, cg, scheduler)
+        scheduler = TemplateScheduler(chain, strategy_holder, repo)
+        discovery = DiscoveryTask(chain, strategy_holder, cg, scheduler)
         pipeline = SignalPipeline(
             chain=chain,
-            strategy=chain_strategy,
+            strategy_holder=strategy_holder,
             repo=repo,
             cg=cg,
             gp=gp,
             ws=ws_clients[chain],
             candle_buffer=candle_buffers[chain],
-            pipeline=CandidatePipeline(chain, chain_strategy, cg, gp, repo),
+            pipeline=CandidatePipeline(chain, strategy_holder, cg, gp, repo),
             bus=bus,
             admin=admin,
             signal_chat_id=settings.telegram_signal_chat_id,
@@ -493,6 +496,7 @@ class CoreActions:
         self._settings = settings
         self._cg = cg
         self._strategy_path = strategy_path
+        self.strategy_holder = None  # 由 main 注入，激活后热替换
 
     def confirm_payload(self, command: str, args: str) -> dict | None:
         if command == "/strategy" and args.split(maxsplit=1)[0] == "activate":
@@ -515,7 +519,7 @@ class CoreActions:
             await notify.send(f"未知核心动作: {action}", target="admin")
 
     async def _do_activate(self, args: str) -> str:
-        from app.core.config import load_strategy_file
+        from app.core.config import StrategyFile, load_strategy_file
 
         try:
             candidate = load_strategy_file(self._strategy_path)
@@ -525,9 +529,13 @@ class CoreActions:
             aid = await self._activation.activate(
                 candidate, admin_id=self._settings.telegram_admin_id
             )
+            # 进程内策略热替换（文档第 10.6 节：原子替换进程内策略）
+            if self.strategy_holder is not None:
+                self.strategy_holder.set(candidate)
+                log.info("进程内策略已热替换: %s", candidate.revision)
         except Exception as exc:
             return f"激活失败: {exc}"
-        return f"已激活 {candidate.revision}（activation_id={aid[:8]}）"
+        return f"已激活 {candidate.revision}（activation_id={aid[:8]}），进程内已生效"
 
     async def _do_rollback(self, args: str) -> str:
         revision = args.split(maxsplit=1)[1].strip() if len(args.split(maxsplit=1)) > 1 else ""
@@ -537,9 +545,20 @@ class CoreActions:
             aid = await self._activation.rollback(
                 revision, admin_id=self._settings.telegram_admin_id
             )
+            if self.strategy_holder is not None:
+                active = await self._activation.current_active()
+                if active is not None:
+                    from app.core.config import StrategyFile
+
+                    self.strategy_holder.set(
+                        StrategyFile.model_validate(
+                            json.loads(active["canonical"])
+                        )
+                    )
+                    log.info("进程内策略已热回退: %s", revision)
         except Exception as exc:
             return f"回退失败: {exc}"
-        return f"已回退到 {revision}（activation_id={aid[:8]}）"
+        return f"已回退到 {revision}（activation_id={aid[:8]}），进程内已生效"
 
     async def _do_telegram_retry(self, args: str) -> str:
         key = args.split(maxsplit=1)[1].strip() if len(args.split(maxsplit=1)) > 1 else ""

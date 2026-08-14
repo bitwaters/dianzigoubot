@@ -206,10 +206,15 @@ def decide_pool(
 
 
 class TemplateScheduler:
-    def __init__(self, chain: str, collection, repo: Repository) -> None:
+    def __init__(self, chain: str, strategy_holder, repo: Repository) -> None:
         self.chain = chain
-        self.collection = collection
+        self._strategy_holder = strategy_holder
         self.repo = repo
+
+    @property
+    def collection(self):
+        return getattr(self._strategy_holder.get(), self.chain).collection
+
 
     async def due_templates(self, now_ms: int) -> list[MegafilterTemplate]:
         due = []
@@ -253,17 +258,21 @@ class CandidatePipeline:
     def __init__(
         self,
         chain: str,
-        strategy: ChainStrategy,
+        strategy_holder,
         cg: CoinGeckoClient,
         gp: GoPlusClient,
         repo: Repository,
     ) -> None:
         self.chain = chain
-        self.strategy = strategy
+        self._strategy_holder = strategy_holder
         self.cg = cg
         self.gp = gp
         self.repo = repo
         self._cache: dict[str, tuple[int, DeepCheckResult]] = {}
+
+    @property
+    def strategy(self) -> ChainStrategy:
+        return getattr(self._strategy_holder.get(), self.chain)
 
     def _cache_ttl_ms(self) -> int:
         return self.strategy.discovery.rest_refresh_seconds * 1000
@@ -428,15 +437,21 @@ class DiscoveryTask:
     def __init__(
         self,
         chain: str,
-        strategy: ChainStrategy,
+        strategy_holder,
         cg: CoinGeckoClient,
         scheduler: TemplateScheduler,
     ) -> None:
         self.chain = chain
-        self.strategy = strategy
+        self._strategy_holder = strategy_holder
         self.cg = cg
         self.scheduler = scheduler
         self.on_pool: Optional[Callable[[PoolAttributes, PoolLabel, MegafilterTemplate], Awaitable[None]]] = None
+
+    @property
+    def strategy(self) -> ChainStrategy:
+        return self._strategy_holder.get().model_dump() and getattr(
+            self._strategy_holder.get(), self.chain
+        )
 
     async def fetch_template(self, template: MegafilterTemplate) -> list[PoolAttributes]:
         """按模板执行一次采集（run 与 collection dry-run 共用）。"""

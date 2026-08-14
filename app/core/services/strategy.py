@@ -428,7 +428,7 @@ class SignalPipeline:
         self,
         *,
         chain: str,
-        strategy,
+        strategy_holder,
         repo,
         cg,
         gp,
@@ -442,7 +442,7 @@ class SignalPipeline:
         top_pool_lookup=None,
     ) -> None:
         self.chain = chain
-        self.strategy = strategy
+        self._strategy_holder = strategy_holder
         self._repo = repo
         self._cg = cg
         self._gp = gp
@@ -460,6 +460,11 @@ class SignalPipeline:
         self._new_pool_inflight = 0
         self._dispatcher: asyncio.Task | None = None
         self.stages: dict[str, int] = {name: 0 for name in self.STAGES}
+
+    @property
+    def strategy(self):
+        """热替换支持：每次取当前 ACTIVE（文档第 10.6 节）。"""
+        return self._strategy_holder.get()
 
     def _ensure_dispatcher(self) -> None:
         if self._dispatcher is None or self._dispatcher.done():

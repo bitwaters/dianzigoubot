@@ -625,6 +625,19 @@ def load_strategy_file(path: Path) -> StrategyFile:
     return StrategyFile.model_validate(raw)
 
 
+class StrategyHolder:
+    """进程内策略持有器：激活/回退时热替换（文档第 10.6 节）。"""
+
+    def __init__(self, strategy: StrategyFile) -> None:
+        self._strategy = strategy
+
+    def get(self) -> StrategyFile:
+        return self._strategy
+
+    def set(self, strategy: StrategyFile) -> None:
+        self._strategy = strategy
+
+
 # ---------------------------------------------------------------------------
 # 4. 插件配置
 # ---------------------------------------------------------------------------

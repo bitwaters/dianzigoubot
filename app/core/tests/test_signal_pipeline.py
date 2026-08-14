@@ -19,6 +19,7 @@ from app.core.clients.coingecko import (
 from app.core.clients.coingecko_ws import G3CandleBuffer
 from app.core.config import load_strategy_file
 from app.core.services.security import SecurityResult
+from app.core.config import StrategyHolder
 from app.core.services.strategy import SignalPipeline
 from app.core.storage.database import Database, clear_env_db
 from app.core.storage.repository import Repository
@@ -222,9 +223,10 @@ class TestSignalPipelineE2E:
         await _feed_bars(buffer, "P1")
         await _feed_bars(buffer, "P2")
 
+        holder = StrategyHolder(self._chain())
         pipeline = SignalPipeline(
             chain="solana",
-            strategy=self._chain(),
+            strategy_holder=holder,
             repo=repo,
             cg=cg,
             gp=None,
@@ -282,9 +284,10 @@ class TestSignalPipelineE2E:
         buffer = G3CandleBuffer()
         bus = FakeBus()
 
+        holder = StrategyHolder(STRATEGY.solana)
         pipeline = SignalPipeline(
             chain="solana",
-            strategy=STRATEGY.solana,
+            strategy_holder=holder,
             repo=repo,
             cg=cg,
             gp=None,
