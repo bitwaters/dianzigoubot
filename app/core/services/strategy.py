@@ -410,9 +410,12 @@ class SignalPipeline:
         "seen",
         "trusted_quote_fail",
         "trusted_quote_fail",
+        "token_info_fail",
         "security_fail",
         "go_plus_fail",
         "market_quality_fail",
+        "detail_missing",
+        "barrier_empty",
         "g3_incomplete",
         "score_below_setup",
         "anti_chase_block",
@@ -572,6 +575,7 @@ class SignalPipeline:
         # 2. 深查（token 级一次；池级批量快照）
         result = await self._pipeline.deep_check(token, addresses)
         if result.errors.get("token_info"):
+            self._bump("token_info_fail")
             return
         if result.security is None:
             self._bump("go_plus_fail")
@@ -606,15 +610,20 @@ class SignalPipeline:
                     self.chain, subscribed, include_volume_breakdown=True
                 )
             except Exception as exc:
+                self._bump("market_quality_fail")  # 复用为快照失败信号？否：单独日志
                 log.warning("第二份快照失败 %s: %s", token, exc)
                 return
             detail_map = {d.address: d for d in details}
+            if len(windows) > 0 and not detail_map:
+                log.info("诊断 %s %s: windows=%d 但第二份快照返回空",
+                         self.chain, token[:10], len(windows))
 
             # 5. 逐池评分（含聪明钱）；市场质量硬门禁先行（文档第 6.4 节）
             scored = []
             for addr, window in windows.items():
                 detail = detail_map.get(addr)
                 if detail is None or detail.reserve_in_usd is None:
+                    self._bump("detail_missing")
                     continue
                 if not passes_market_quality(detail, self.strategy.market_quality):
                     self._bump("market_quality_fail")
@@ -639,6 +648,7 @@ class SignalPipeline:
                 },
             )
             if chosen is None:
+                self._bump("barrier_empty")
                 return
             entry = next(e for e in scored if e[0] == chosen)
             pool_address, window, detail, snapshot, scoring = entry
