@@ -266,6 +266,75 @@ class TestConfirmation:
         await db.close()
 
 
+class TestCoreActions:
+    @pytest.fixture
+    def db_path(self, tmp_path):
+        path = tmp_path / "bot.sqlite"
+        yield path
+        clear_env_db(path)
+
+    async def test_strategy_status_and_confirm_routing(self, db_path):
+        from app.core.main import CoreActions
+        from app.core.config import load_strategy_file
+        from app.core.services.strategy import StrategyActivationService
+
+        db = await _open(db_path)
+        repo = Repository(db.conn)
+        activation = StrategyActivationService(repo)
+        baseline = load_strategy_file(
+            __import__("pathlib").Path(__file__).parent / "fixtures" / "strategy_valid.yaml"
+        )
+        await activation.activate(baseline, admin_id=7)
+
+        class SettingsStub:
+            telegram_admin_id = 7
+
+        core = CoreActions(repo, activation, SettingsStub(), None, None)
+
+        # 确认路由：activate/rollback/telegram retry 需要确认
+        assert core.confirm_payload("/strategy", "activate")["action"] == "strategy_activate"
+        assert core.confirm_payload("/strategy", "rollback strategy-1")["action"] == "strategy_rollback"
+        assert core.confirm_payload("/telegram", "retry k1")["action"] == "telegram_retry"
+        assert core.confirm_payload("/strategy", "status") is None
+        assert core.confirm_payload("/status", "") is None
+
+        status = await core.strategy_command("status")
+        assert "strategy-1" in status
+        usage = await core.strategy_command("backtest")
+        assert "信号数" in usage
+        await db.close()
+
+    async def test_telegram_retry_requeue(self, db_path):
+        from app.core.main import CoreActions
+
+        db = await _open(db_path)
+        repo = Repository(db.conn)
+        await repo.insert_outbox(
+            delivery_key="k1", kind="NOTIFY", parent_id=None,
+            chat_target="123", text="hello",
+        )
+        await repo.update_outbox_status("k1", "FAILED")
+
+        class SettingsStub:
+            telegram_admin_id = 7
+
+        class ActivationStub:
+            async def current_active(self):
+                return None
+
+        core = CoreActions(repo, ActivationStub(), SettingsStub(), None, None)
+        result = await core._do_telegram_retry("retry k1")
+        assert "已重新入队" in result
+        row = await repo.get_outbox("k1")
+        assert row["status"] == "PENDING"
+        assert row["retry_count"] == 1
+        # 已投递成功的消息拒绝补发
+        await repo.update_outbox_status("k1", "SENT")
+        result = await core._do_telegram_retry("retry k1")
+        assert "无需补发" in result
+        await db.close()
+
+
 class TestAdminCommands:
     async def test_pause_resume_status(self, db_path):
         db = await _open(db_path)

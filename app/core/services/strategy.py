@@ -11,6 +11,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal, Optional
 
 from app.core.models import canonical_json, utc_now_ms
+from app.core.services.discovery import decide_pool
 
 log = logging.getLogger(__name__)
 
@@ -397,7 +398,9 @@ def evaluate_candidate(
 
 
 class SignalPipeline:
-    """把 G4-G6 组件串成实时信号闭环（v1 编排，聚焦时长与轮数由策略配置）。"""
+    """把 G4-G6 组件串成实时信号闭环（文档第 3.2、4.4 节）。"""
+
+    AGGREGATE_WINDOW_MS = 8_000  # 同代币多池聚合窗口
 
     def __init__(
         self,
@@ -412,7 +415,7 @@ class SignalPipeline:
         pipeline,
         bus,
         admin,
-        admin_chat_id: int,
+        signal_chat_id: int,
         active_snapshot,
         top_pool_lookup=None,
     ) -> None:
@@ -426,83 +429,117 @@ class SignalPipeline:
         self._pipeline = pipeline  # CandidatePipeline
         self._bus = bus
         self._admin = admin
-        self._admin_chat = admin_chat_id
+        self._signal_chat = signal_chat_id  # 信号频道（文档第 8.1 节推送目标）
         self._active = active_snapshot  # (revision, hash)
         self._top_pool_lookup = top_pool_lookup  # (chain, token) -> list[PoolAttributes]
+        self._pending: dict[str, list] = {}
+        self._processing: set[str] = set()
 
     async def handle_pool(self, pool, label) -> None:
-        """发现回调：深查 → 安全 → G3 FOCUS → 评分 → 信号。"""
+        """发现回调：按代币聚合多池，聚合窗口后统一处理（文档第 4.4 节）。"""
         if self._admin is not None and getattr(self._admin, "paused", False):
             return
         if not (pool.base_token_address and pool.address):
             return
         token = pool.base_token_address
+        self._pending.setdefault(token, []).append(pool)
+        if token not in self._processing:
+            self._processing.add(token)
+            asyncio.create_task(self._process_token(token))
 
-        # 决定池选择：发现池须命中可信报价；否则尝试 G1 顶部池映射（文档第 4.4 节）
-        candidate = pool
-        if not self._trusted_quote(pool) and self._top_pool_lookup is not None:
+    async def _process_token(self, token: str) -> None:
+        try:
+            await asyncio.sleep(self.AGGREGATE_WINDOW_MS / 1000)
+            pools = self._pending.pop(token, [])
+            await self._process_candidates(token, pools)
+        except Exception:
+            log.exception("候选处理异常 %s", token)
+        finally:
+            self._processing.discard(token)
+
+    async def _process_candidates(self, token: str, pools) -> None:
+        # 1. 可信报价过滤 + G1 顶部池映射合并 + 地址去重（文档第 4.4 节）
+        candidates: dict = {}
+        for pool in pools:
+            if self._trusted_quote(pool):
+                candidates[pool.address] = pool
+        if self._top_pool_lookup is not None:
             try:
                 mapped = self._top_pool_lookup(self.chain, token)
             except Exception:
                 mapped = []
-            candidate = next(
-                (p for p in mapped if self._trusted_quote(p) and p.address),
-                None,
-            )
-        if candidate is None or not self._trusted_quote(candidate):
+            for pool in mapped or []:
+                if self._trusted_quote(pool):
+                    candidates.setdefault(pool.address, pool)
+        if not candidates:
             return  # 文档第 4.4 节：无可信报价资产池仅观察
+        addresses = list(candidates)
 
-        pool_address = candidate.address
-        candidate_pools = [pool_address]
-
-        result = await self._pipeline.deep_check(token, candidate_pools)
+        # 2. 深查（token 级一次；池级批量快照）
+        result = await self._pipeline.deep_check(token, addresses)
         if result.errors.get("token_info"):
             return
         if result.security is None or not result.security.passed:
             return
 
-        # G3 FOCUS（最长 focus_seconds_max）；防追高等待期间保持订阅
+        # 3. 并行 G3 FOCUS：全部准入池（每个精确池独立占订阅与计费）
         focus_ms = self.strategy.collection.websocket.focus_seconds_max * 1000
-        added = self._ws.add_g3_pool(pool_address, "base")
-        if not added:
-            return
+        subscribed = [a for a in addresses if self._ws.add_g3_pool(a, "base")]
         try:
+            windows: dict[str, list] = {}
             deadline = utc_now_ms() + focus_ms
-            window = None
-            while utc_now_ms() < deadline:
-                window = self._candles.window(pool_address, "base", 10)
-                if window is not None:
-                    break
+            while utc_now_ms() < deadline and len(windows) < len(subscribed):
+                for addr in subscribed:
+                    window = self._candles.window(addr, "base", 10)
+                    if window is not None:
+                        windows.setdefault(addr, window)
                 await asyncio.sleep(0.25)
-            if window is None:
-                return  # INCOMPLETE：缺秒或不足 10 根
 
-            # 两份快照本地接收时间相隔至少 10 秒（文档第 4.4 节）
+            # 4. 两份快照本地接收时间相隔至少 10 秒（文档第 4.4 节）
             if result.first_snapshot_at_ms is not None:
                 wait_ms = result.first_snapshot_at_ms + 10_000 - utc_now_ms()
                 if wait_ms > 0:
                     await asyncio.sleep(wait_ms / 1000)
-
-            # 第二份聚合快照
             try:
                 details = await self._cg.pools_multi(
-                    self.chain, candidate_pools, include_volume_breakdown=True
+                    self.chain, subscribed, include_volume_breakdown=True
                 )
             except Exception as exc:
                 log.warning("第二份快照失败 %s: %s", token, exc)
                 return
-            detail = next((d for d in details if d.address == pool_address), None)
-            if detail is None or detail.reserve_in_usd is None:
-                return
+            detail_map = {d.address: d for d in details}
 
-            snapshot = self._build_snapshot(token, pool_address, window, detail, result)
-            snapshot.smart = await self._eval_smart_money(token, pool_address, detail, result)
-            features = compute_features(snapshot)
-            scoring = score(features, self.strategy)
-            if scoring.rejected:
-                return
+            # 5. 逐池评分（含聪明钱）
+            scored = []
+            for addr, window in windows.items():
+                detail = detail_map.get(addr)
+                if detail is None or detail.reserve_in_usd is None:
+                    continue
+                snapshot = self._build_snapshot(token, addr, window, detail, result)
+                snapshot.smart = await self._eval_smart_money(token, addr, detail, result)
+                features = compute_features(snapshot)
+                scoring = score(features, self.strategy)
+                if scoring.rejected:
+                    continue
+                scored.append((addr, window, detail, snapshot, scoring))
 
-            # 防追高：初始窗口判定；触发等待后保持订阅续评至 max_wait_seconds
+            # 6. 池选择屏障：trade_allowed > 总分 > 有效流动性 > 5m 成交量 > 地址
+            chosen = decide_pool(
+                [(entry[2], entry[4].total_score) for entry in scored],
+                liquidity={
+                    entry[0]: entry[2].reserve_in_usd or Decimal(0) for entry in scored
+                },
+                volume_5m={
+                    entry[0]: entry[2].volume_usd.get("m5") or Decimal(0)
+                    for entry in scored
+                },
+            )
+            if chosen is None:
+                return
+            entry = next(e for e in scored if e[0] == chosen)
+            pool_address, window, detail, snapshot, scoring = entry
+
+            # 7. 防追高：决定池判定；触发等待后保持订阅续评至 max_wait_seconds
             anti = anti_chase_check(window, window, self.strategy.anti_chase)
             if anti.wait_triggered and not anti.allowed:
                 wait_deadline = utc_now_ms() + self.strategy.anti_chase.max_wait_seconds * 1000
@@ -515,6 +552,8 @@ class SignalPipeline:
             if not anti.allowed:
                 return
 
+            # 8. 候选状态机 + 信号
+            features = compute_features(snapshot)
             level = signal_level(scoring, self.strategy)
             state = await self._load_state(token)
             decision = evaluate_candidate(
@@ -560,18 +599,19 @@ class SignalPipeline:
                 now_ms=utc_now_ms(),
             )
             await self._bus.publish_signal_created(signal_id)
-            # Telegram 买入信号（kind=BUY_SIGNAL 供过期标记使用）
+            # Telegram 买入信号推送到信号频道（文档第 8.1 节）
             row = await self._repo.get_signal(signal_id)
             text = _signal_text(row)
             await self._repo.insert_outbox(
                 delivery_key=f"sig:{signal_id}",
                 kind="BUY_SIGNAL",
                 parent_id=signal_id,
-                chat_target=str(self._admin_chat),
+                chat_target=str(self._signal_chat),
                 text=text,
             )
         finally:
-            self._ws.remove_g3_pool(pool_address, "base")
+            for addr in subscribed:
+                self._ws.remove_g3_pool(addr, "base")
 
     async def _eval_smart_money(
         self, token: str, pool_address: str, detail, result
@@ -695,6 +735,7 @@ class SignalPipeline:
             signal_generation=state.generation,
             setup_started_at=state.setup_started_at,
             below_setup_since=state.below_setup_since,
+            expires_at=utc_now_ms() + self.strategy.discovery.candidate_ttl_seconds * 1000,
         )
 
 

@@ -166,6 +166,26 @@ class Repository:
         )
         return list(await cursor.fetchall())
 
+    async def list_active_candidate_tokens(self, chain: str, limit: int = 100) -> list[str]:
+        """G1 订阅目标集合：活跃候选（WATCHING/SETUP）代币。"""
+        cursor = await self._conn.execute(
+            """SELECT token_address FROM candidates
+               WHERE chain = ? AND status IN ('WATCHING', 'SETUP')
+               ORDER BY updated_at DESC LIMIT ?""",
+            (chain, limit),
+        )
+        return [row["token_address"] for row in await cursor.fetchall()]
+
+    async def expire_candidates(self, now_ms: int) -> int:
+        """候选 TTL 过期 → EXPIRED（文档第 7.1 节）。"""
+        cursor = await self._conn.execute(
+            """UPDATE candidates SET status = 'EXPIRED', updated_at = ?
+               WHERE expires_at IS NOT NULL AND expires_at < ?
+                 AND status IN ('WATCHING', 'SETUP', 'SIGNAL')""",
+            (now_ms, now_ms),
+        )
+        return cursor.rowcount
+
     async def list_signals(self, limit: int = 10) -> list[aiosqlite.Row]:
         cursor = await self._conn.execute(
             "SELECT * FROM signals ORDER BY created_at DESC LIMIT ?", (limit,)
@@ -375,6 +395,18 @@ class Repository:
             (now_ms, now_ms),
         )
         return cursor.rowcount
+
+    async def requeue_outbox(self, delivery_key: str) -> bool:
+        """管理员人工补发（/telegram retry）：任意未终态状态重新入队 PENDING。"""
+        cursor = await self._conn.execute(
+            """UPDATE telegram_outbox SET status = 'PENDING',
+                                          retry_count = retry_count + 1,
+                                          next_attempt_at = NULL,
+                                          updated_at = ?
+               WHERE delivery_key = ? AND status != 'SENT'""",
+            (utc_now_ms(), delivery_key),
+        )
+        return cursor.rowcount > 0
 
     async def update_outbox_status(
         self,
