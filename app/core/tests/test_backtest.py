@@ -242,7 +242,7 @@ class TestStrategyActivation:
         baseline = load_strategy_file(
             __import__("pathlib").Path(__file__).parent / "fixtures" / "strategy_valid.yaml"
         )
-        # 依序激活 strategy-1 → strategy-2 → baseline(strategy-3, parent=strategy-2)
+        # 依序激活 strategy-1 → strategy-2 → strategy-3 → baseline(strategy-4)
         seed = baseline.model_copy(
             update={"revision": "strategy-1", "parent_revision": None}
         )
@@ -251,9 +251,13 @@ class TestStrategyActivation:
             update={"revision": "strategy-2", "parent_revision": "strategy-1"}
         )
         await service.activate(seed2, admin_id=7)
+        seed3 = baseline.model_copy(
+            update={"revision": "strategy-3", "parent_revision": "strategy-2"}
+        )
+        await service.activate(seed3, admin_id=7)
         await service.activate(baseline, admin_id=7)
         current = await service.current_active()
-        assert current["revision"] == "strategy-3"
+        assert current["revision"] == "strategy-4"
 
         # revision 复用拒绝
         with pytest.raises(ValueError, match="已使用"):
@@ -286,9 +290,13 @@ class TestStrategyActivation:
             update={"revision": "strategy-2", "parent_revision": "strategy-1"}
         )
         await service.activate(seed2, admin_id=7)
+        seed3 = baseline.model_copy(
+            update={"revision": "strategy-3", "parent_revision": "strategy-2"}
+        )
+        await service.activate(seed3, admin_id=7)
         await service.activate(baseline, admin_id=7)
         bad = baseline.model_copy(
-            update={"revision": "strategy-4", "parent_revision": "strategy-99"}
+            update={"revision": "strategy-5", "parent_revision": "strategy-99"}
         )
         with pytest.raises(ValueError, match="不一致"):
             await service.activate(bad, admin_id=7)

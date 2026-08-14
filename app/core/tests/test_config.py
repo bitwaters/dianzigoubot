@@ -57,8 +57,8 @@ class TestLogging:
 class TestStrategyValid:
     def test_valid_fixture_loads(self):
         strategy = load_strategy_file(FIXTURES / "strategy_valid.yaml")
-        assert strategy.revision == "strategy-3"
-        assert strategy.parent_revision == "strategy-2"
+        assert strategy.revision == "strategy-4"
+        assert strategy.parent_revision == "strategy-3"
         assert strategy.solana.security.gt_score_min == 40
         assert isinstance(strategy.bsc.security.allowed_pool_models, list)
         assert len(strategy.strategy_hash) == 64
