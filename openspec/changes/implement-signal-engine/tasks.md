@@ -26,10 +26,10 @@
 
 ### 4. 发现与候选流水线
 
-- [ ] 4.1 `discovery_task`：四个查询模板调度（独立 `next_due_at`）、Megafilter 参数注入、三标签判定（文档第 4.2/4.3 节）
-- [ ] 4.2 候选依赖图：Token Info → Multiple Pools → Tokens Multi → Top Holders → GoPlus PRE_MONITOR_CHECK → G3（文档第 4.4 节）；筛选前特征与逐池决策特征写入 `discovery_snapshots`
-- [ ] 4.3 池选择屏障与决定池选择（trade_allowed > 总分 > 流动性 > 成交量 > 地址）
-- [ ] 4.4 安全门禁状态机（SAFE/RISK/UNKNOWN/NOT_APPLICABLE/STALE，文档第 5 章）
+- [x] 4.1 `discovery_task`：四个查询模板调度（独立 `next_due_at`）、Megafilter 参数注入、三标签判定（文档第 4.2/4.3 节）
+- [x] 4.2 候选依赖图：Token Info → Multiple Pools → Tokens Multi → Top Holders → GoPlus PRE_MONITOR_CHECK → G3（文档第 4.4 节）；筛选前特征与逐池决策特征写入 `discovery_snapshots`
+- [x] 4.3 池选择屏障与决定池选择（trade_allowed > 总分 > 流动性 > 成交量 > 地址）
+- [x] 4.4 安全门禁状态机（SAFE/RISK/UNKNOWN/NOT_APPLICABLE/STALE，文档第 5 章）
 
 ### 5. 实时行情（WebSocket）
 

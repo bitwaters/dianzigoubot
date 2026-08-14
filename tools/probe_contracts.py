@@ -70,6 +70,7 @@ async def probe() -> dict:
             await record("pool_trades", lambda: _pool_trades_probe(cg, pool_address, token_address))
             await record("pool_ohlcv", lambda: _pool_ohlcv_probe(cg, pool_address, token_address))
             await record("g2_onchaintrade", lambda: _g2_probe(pool_address))
+            await record("g1_g3_live", lambda: _g1_g3_probe(pool_address, token_address))
         else:
             report["entries"]["sample"] = {"ok": False, "error": "无可用采样池"}
 
@@ -221,6 +222,34 @@ async def _g2_probe(pool_address: str):
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "messages": received}
     return {"ok": True, "messages_in_10s": received}
+
+
+async def _g1_g3_probe(pool_address: str, token_address: str):
+    """G1/G3 契约探测：使用生产 CoinGeckoWS client 实测 15 秒。"""
+    import os
+
+    from app.core.clients.coingecko_ws import CoinGeckoWS
+
+    events = {"g1": 0, "g3": 0}
+
+    async def on_g1(event):
+        events["g1"] += 1
+
+    async def on_g3(event):
+        events["g3"] += 1
+
+    client = CoinGeckoWS(
+        os.environ["COINGECKO_API_KEY"], SOLANA, on_g1_event=on_g1, on_g3_event=on_g3
+    )
+    client.set_g1_tokens({token_address})
+    client.set_g3_pools({(pool_address, "base")})
+    client.start()
+    await asyncio.sleep(15)
+    await client.stop()
+    return (
+        {"g1_events": events["g1"], "g3_events": events["g3"], "state": client.state},
+        None,
+    )
 
 
 async def _goplus_solana_probe(gp, token_address: str | None):
