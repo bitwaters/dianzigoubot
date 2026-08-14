@@ -27,6 +27,8 @@ from app.core.models import utc_now_ms
 from app.core.services.security import (
     SecurityResult,
     apply_snapshot_ttl,
+    cg_pregate_bsc,
+    cg_pregate_solana,
     evaluate_bsc,
     evaluate_solana,
 )
@@ -359,6 +361,15 @@ class CandidatePipeline:
 
         try:
             if self.chain == "solana":
+                # ②段：CoinGecko 本地硬门禁（不消耗 GoPlus）
+                cg_gate = cg_pregate_solana(
+                    token_info=token_info,
+                    coin_holders=holders,
+                    security_cfg=self.strategy.security,
+                    main_pool_address=main_pool_address,
+                )
+                if not cg_gate.passed:
+                    return cg_gate
                 results = await self.gp.solana_token_security([token_address])
                 raw = results.get(token_address)
                 if raw is None:
@@ -371,6 +382,14 @@ class CandidatePipeline:
                     coin_holders=holders,
                 )
             else:
+                cg_gate = cg_pregate_bsc(
+                    token_info=token_info,
+                    coin_holders=holders,
+                    security_cfg=self.strategy.security,
+                    main_pool_address=main_pool_address,
+                )
+                if not cg_gate.passed:
+                    return cg_gate
                 results = await self.gp.evm_token_security(56, [token_address])
                 raw = results.get(token_address)
                 if raw is None:

@@ -341,9 +341,11 @@ client 只有收到频道 `confirm_subscription` 和每个池的 `onchain_ohlcv:
 ### 5.2 检查顺序与 TTL
 
 ```text
-CoinGecko 采集硬检查
-→ CoinGecko Token/Pool 安全与质量字段
-→ GoPlus PRE_MONITOR_CHECK
+CoinGecko 采集硬检查（Megafilter 服务端 checks：good_gt_score；BSC 另加 no_honeypot）
+→ CoinGecko 本地安检（硬门禁：GT Score、mint/freeze 权限、is_honeypot、
+  developer/creator 持仓、Top10 集中度；不通过即拒绝，不消耗 GoPlus）
+→ GoPlus PRE_MONITOR_CHECK（补充安检：税率、LP 锁仓、owner 风险、黑名单、
+  可铸造/可暂停等 CoinGecko 缺失字段）
 → WebSocket 监控
 → GoPlus PRE_EXECUTION_CHECK
 → 信号落库与事件发布
@@ -353,7 +355,7 @@ CoinGecko 采集硬检查
 - `PRE_MONITOR_CHECK` 成功快照 TTL 为 15 分钟。
 - 信号创建使用不超过 120 秒的 `PRE_EXECUTION_CHECK` 成功快照。
 - GoPlus 复检失败或超时只阻止本次发信号。
-- GoPlus 使用无 Authorization 的安全接口，全局限制 30 次/分钟。
+- GoPlus 鉴权为双模式：默认无 Authorization 调用（免费接口，客户端限速 30 次/分钟）；配置 `GOPLUS_APP_KEY`/`GOPLUS_APP_SECRET` 后按官方签名契约（`sha1(app_key + time + app_secret)`）换取 access_token，以 `Authorization: Bearer` 调用，token 到期自动刷新。有鉴权时客户端限速按实测探测值配置（`GOPLUS_RATE_PER_MINUTE`，默认为实测上限的 80%）。两种模式均为全局令牌桶限速，不突发。
 
 ### 5.3 BSC CoinGecko 门禁
 

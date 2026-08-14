@@ -1,13 +1,16 @@
 """GoPlus 安全接口 client 与归一化模型（总控文档第 5.4、5.6 节）。
 
-- 无 Authorization 调用；全局 30 次/分钟限流（token bucket）。
+- 双模式鉴权（文档第 5.2 节）：默认无 Authorization（客户端限速 30 次/分钟）；
+  配置 GOPLUS_API_TOKEN 后使用 Authorization: Bearer，限速按 GOPLUS_RATE_PER_MINUTE。
 - 归一化保留"字段是否存在"语义：布尔字段以字符串 "0"/"1" 保存，
   缺失为 None，由业务层映射 SAFE/RISK/UNKNOWN/NOT_APPLICABLE。
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import os
 import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -18,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.gopluslabs.io"
-RATE_LIMIT_PER_MINUTE = 30
+DEFAULT_RATE_PER_MINUTE = 30
 DEFAULT_TIMEOUT = 20.0
 
 
@@ -78,10 +81,10 @@ def _flag(value: Any) -> str | None:
 
 
 class TokenBucket:
-    """简单 token bucket：全局 30 次/分钟，初始不突发（生产 4029 教训）。"""
+    """简单 token bucket：全局限速、初始不突发（生产 4029 教训）。"""
 
     def __init__(
-        self, rate: int = RATE_LIMIT_PER_MINUTE, initial: float = 0.0
+        self, rate: int = DEFAULT_RATE_PER_MINUTE, initial: float = 0.0
     ) -> None:
         self._rate = rate
         self._tokens = initial
@@ -470,11 +473,36 @@ class GoPlusClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        api_token: str | None = None,
+        app_key: str | None = None,
+        app_secret: str | None = None,
+        rate_per_minute: int | None = None,
     ) -> None:
+        # 鉴权优先级（文档第 5.2 节）：显式参数 > 环境变量；全部缺失则无鉴权
+        self._api_token = (
+            api_token
+            if api_token is not None
+            else os.environ.get("GOPLUS_API_TOKEN")
+        )
+        self._app_key = (
+            app_key if app_key is not None else os.environ.get("GOPLUS_APP_KEY")
+        )
+        self._app_secret = (
+            app_secret
+            if app_secret is not None
+            else os.environ.get("GOPLUS_APP_SECRET")
+        )
+        self._access_token: str | None = None
+        self._token_expires_at = 0.0
+        self._token_lock = asyncio.Lock()
         self._client = httpx.AsyncClient(
             base_url=BASE_URL, transport=transport, timeout=timeout
         )
-        self._bucket = TokenBucket()
+        rate = rate_per_minute
+        if rate is None:
+            rate = int(os.environ.get("GOPLUS_RATE_PER_MINUTE", DEFAULT_RATE_PER_MINUTE))
+        self._bucket = TokenBucket(rate=rate)
+        self.rate_per_minute = rate
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -484,6 +512,52 @@ class GoPlusClient:
 
     async def __aexit__(self, *exc) -> None:
         await self.close()
+
+    # -- 鉴权 ---------------------------------------------------------------
+
+    async def _auth_headers(self) -> dict[str, str]:
+        if self._api_token:
+            return {"Authorization": f"Bearer {self._api_token}"}
+        if self._app_key and self._app_secret:
+            token = await self._ensure_access_token()
+            return {"Authorization": f"Bearer {token}"}
+        return {}
+
+    async def _ensure_access_token(self) -> str:
+        """APP_KEY + APP_SECRET 签名换 access_token（官方契约：
+        sign = sha1(app_key + time + app_secret)，time 为秒级时间戳）。"""
+        now = time.time()
+        if self._access_token and now < self._token_expires_at:
+            return self._access_token
+        async with self._token_lock:
+            if self._access_token and now < self._token_expires_at:
+                return self._access_token
+            ts = int(time.time())
+            sign = hashlib.sha1(
+                f"{self._app_key}{ts}{self._app_secret}".encode()
+            ).hexdigest()
+            response = await self._client.post(
+                "/api/v1/token",
+                json={"app_key": self._app_key, "sign": sign, "time": ts},
+            )
+            if response.status_code != 200:
+                raise GoPlusApiError(f"access token 请求失败 {response.status_code}")
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise GoPlusContractError("access token 响应非 JSON") from exc
+            if body.get("code") != 1:
+                raise GoPlusContractError(
+                    f"access token 业务失败 code={body.get('code')} "
+                    f"message={body.get('message')}"
+                )
+            result = body.get("result") or {}
+            self._access_token = result.get("access_token")
+            if not self._access_token:
+                raise GoPlusContractError("access token 响应缺少 access_token")
+            expires_in = int(result.get("expires_in", 7200))
+            self._token_expires_at = time.time() + expires_in * 0.8
+            return self._access_token
 
     async def evm_token_security(
         self, chain_id: int, contract_addresses: list[str]
@@ -525,8 +599,9 @@ class GoPlusClient:
         return out
 
     async def _get(self, path: str, params: dict[str, Any]) -> Any:
+        headers = await self._auth_headers()
         try:
-            response = await self._client.get(path, params=params)
+            response = await self._client.get(path, params=params, headers=headers)
         except httpx.TimeoutException as exc:
             raise GoPlusTimeout(f"{path} 超时") from exc
         if response.status_code == 429:

@@ -74,6 +74,60 @@ class TestEvmParsing:
             _flag("yes")
 
 
+class TestAuth:
+    def test_bearer_headers_with_static_token(self):
+        import asyncio
+
+        from app.core.clients.goplus import GoPlusClient
+
+        client = GoPlusClient(api_token="static-token")
+        headers = asyncio.run(client._auth_headers())
+        assert headers == {"Authorization": "Bearer static-token"}
+
+    def test_app_key_secret_signature(self):
+        import asyncio
+
+        import httpx
+
+        from app.core.clients.goplus import GoPlusClient
+
+        # 模拟 access token 端点：校验签名 = sha1(app_key+time+app_secret)
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import hashlib
+
+            body = __import__("json").loads(request.content)
+            captured.update(body)
+            expected = hashlib.sha1(
+                f"KEY{body['time']}SECRET".encode()
+            ).hexdigest()
+            if body["sign"] != expected:
+                return httpx.Response(400, json={"code": -1, "message": "bad sign"})
+            return httpx.Response(
+                200,
+                json={"code": 1, "result": {"access_token": "tok-1", "expires_in": 3600}},
+            )
+
+        client = GoPlusClient(
+            transport=httpx.MockTransport(handler), app_key="KEY", app_secret="SECRET"
+        )
+        token = asyncio.run(client._ensure_access_token())
+        assert token == "tok-1"
+        assert captured["app_key"] == "KEY"
+        # 缓存命中：不再请求
+        token2 = asyncio.run(client._ensure_access_token())
+        assert token2 == "tok-1"
+
+    def test_no_auth_when_no_credentials(self):
+        import asyncio
+
+        from app.core.clients.goplus import GoPlusClient
+
+        client = GoPlusClient()
+        assert asyncio.run(client._auth_headers()) == {}
+
+
 class TestRateLimit:
     def test_token_bucket(self):
         import asyncio

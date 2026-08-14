@@ -144,6 +144,120 @@ def top10_holding_pct(
 
 
 # ---------------------------------------------------------------------------
+# 两段安检：CoinGecko 本地硬门禁（②段，不消耗 GoPlus）
+# ---------------------------------------------------------------------------
+
+
+def cg_pregate_solana(
+    *,
+    token_info: TokenInfo,
+    coin_holders: TopHolders | None,
+    security_cfg,
+    main_pool_address: str | None = None,
+) -> SecurityResult:
+    """CoinGecko 本地安检（文档第 5.2 节②段）：不通过即拒绝，不进入 GoPlus。"""
+    result = SecurityResult()
+
+    gt = token_info.gt_score
+    if gt is None:
+        result.set("gt_score", "UNKNOWN", "GT_SCORE_MISSING")
+    elif gt < Decimal(security_cfg.gt_score_min):
+        result.set("gt_score", "RISK", "GT_SCORE_LOW", f"gt={gt}")
+    else:
+        result.set("gt_score", "SAFE")
+
+    honeypot = token_info.is_honeypot
+    if honeypot == "unknown" or honeypot is None:
+        result.set("honeypot_cg", "NOT_APPLICABLE", "SOLANA_HONEYPOT_CHECK_UNSUPPORTED")
+    elif isinstance(honeypot, bool):
+        result.set("honeypot_cg", "UNKNOWN", "CONTRACT_CHANGE", f"value={honeypot!r}")
+    else:
+        result.set("honeypot_cg", "UNKNOWN", "CONTRACT_CHANGE", f"value={honeypot!r}")
+
+    for name, value in [
+        ("mint_authority", token_info.mint_authority),
+        ("freeze_authority", token_info.freeze_authority),
+    ]:
+        if value is None:
+            result.set(name, "UNKNOWN", "AUTHORITY_MISSING")
+        elif value == "no":
+            result.set(name, "SAFE")
+        else:
+            result.set(name, "RISK", "AUTHORITY_PRESENT", str(value))
+
+    dev = token_info.developer_holding_percentage
+    result.set_value("developer_or_creator_holding_pct", dev)
+    if dev is None:
+        result.set("developer_holding_pct", "UNKNOWN", "DEV_HOLDING_MISSING")
+    elif dev > security_cfg.developer_holding_pct_max:
+        result.set("developer_holding_pct", "RISK", "DEV_HOLDING_TOO_HIGH", f"{dev}%")
+    else:
+        result.set("developer_holding_pct", "SAFE")
+
+    top10 = top10_holding_pct(
+        coin_holders,
+        [],
+        burn_addresses=BURN_ADDRESSES_SOL,
+        exclude_addresses={main_pool_address} if main_pool_address else None,
+    )
+    result.set_value("top10_holding_pct", top10)
+    if top10 is None:
+        result.set("top10_holding_pct", "UNKNOWN", "NO_VALID_SOURCE")
+    elif top10 > security_cfg.top10_holding_pct_max:
+        result.set("top10_holding_pct", "RISK", "TOP10_TOO_HIGH", f"{top10}%")
+    else:
+        result.set("top10_holding_pct", "SAFE")
+
+    result.recompute()
+    return result
+
+
+def cg_pregate_bsc(
+    *,
+    token_info: TokenInfo,
+    coin_holders: TopHolders | None,
+    security_cfg,
+    main_pool_address: str | None = None,
+) -> SecurityResult:
+    """CoinGecko 本地安检（文档第 5.2 节②段）：不通过即拒绝，不进入 GoPlus。"""
+    result = SecurityResult()
+
+    gt = token_info.gt_score
+    if gt is None:
+        result.set("gt_score", "UNKNOWN", "GT_SCORE_MISSING")
+    elif gt < Decimal(security_cfg.gt_score_min):
+        result.set("gt_score", "RISK", "GT_SCORE_LOW", f"gt={gt}")
+    else:
+        result.set("gt_score", "SAFE")
+
+    honeypot = token_info.is_honeypot
+    if isinstance(honeypot, bool):
+        result.set("honeypot_cg", "RISK" if honeypot else "SAFE")
+    elif honeypot == "unknown" or honeypot is None:
+        result.set("honeypot_cg", "UNKNOWN", "HONEYPOT_UNKNOWN")
+    else:
+        result.set("honeypot_cg", "UNKNOWN", "CONTRACT_CHANGE", f"value={honeypot!r}")
+
+    top10 = top10_holding_pct(
+        coin_holders,
+        [],
+        burn_addresses=BURN_ADDRESSES_EVM,
+        exclude_addresses={main_pool_address} if main_pool_address else None,
+        chain_norm=str.lower,
+    )
+    result.set_value("top10_holding_pct", top10)
+    if top10 is None:
+        result.set("top10_holding_pct", "UNKNOWN", "NO_VALID_SOURCE")
+    elif top10 > security_cfg.top10_holding_pct_max:
+        result.set("top10_holding_pct", "RISK", "TOP10_TOO_HIGH", f"{top10}%")
+    else:
+        result.set("top10_holding_pct", "SAFE")
+
+    result.recompute()
+    return result
+
+
+# ---------------------------------------------------------------------------
 # BSC（总控文档第 5.3、5.4 节）
 # ---------------------------------------------------------------------------
 

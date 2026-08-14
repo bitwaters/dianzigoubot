@@ -411,6 +411,7 @@ class SignalPipeline:
         "trusted_quote_fail",
         "trusted_quote_fail",
         "security_fail",
+        "go_plus_fail",
         "market_quality_fail",
         "g3_incomplete",
         "score_below_setup",
@@ -572,7 +573,10 @@ class SignalPipeline:
         result = await self._pipeline.deep_check(token, addresses)
         if result.errors.get("token_info"):
             return
-        if result.security is None or not result.security.passed:
+        if result.security is None:
+            self._bump("go_plus_fail")
+            return
+        if not result.security.passed:
             self._bump("security_fail")
             return
 
