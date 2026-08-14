@@ -124,8 +124,10 @@ class TestScoring:
         f = compute_features(_snapshot())
         result = score(f, STRATEGY.solana)
         assert 0 <= result.total_score <= 100
-        # 反向特征 fdv_liquidity_ratio = 25，bad=300 good=25 → 恰好 good 满分
-        assert result.feature_scores["fdv_liquidity_ratio"] == Decimal(100)
+        # 反向特征 fdv_liquidity_ratio = 25，bad=200 good=20 → (200-25)/(200-20)
+        assert result.feature_scores["fdv_liquidity_ratio"] == Decimal(
+            "97.22222222"
+        )
         assert result.rejected is False
 
     def test_missing_reject(self):
@@ -139,7 +141,9 @@ class TestScoring:
         snap.pool.volume_m5_usd = None
         f = compute_features(snap)
         result = score(f, STRATEGY.solana)
-        assert result.capped_setup is True
+        # 新阈值：volume_liquidity_ratio_5m 的 missing_action 为 REJECT
+        assert result.rejected is True
+        assert "volume_liquidity_ratio_5m" in result.missing_applied
 
     def test_zero_score_missing(self):
         f = compute_features(_snapshot(gt_score=None))
@@ -185,23 +189,23 @@ class TestAntiChase:
         assert result.wait_triggered is False
 
     def test_vertical_rise_triggers_wait_then_consolidation(self):
-        # 垂直拉升超过阈值
-        bars = _bars(10, step="0.02")  # 每根 +2%，10 根约 +20%
+        # 垂直拉升超过 25% 阈值
+        bars = _bars(10, step="0.03")  # 每根 +3%，10 根约 +30%
         config = STRATEGY.solana.anti_chase
         result = anti_chase_check(bars, bars, config)
         assert result.wait_triggered is True
 
-        # 高位整理：后段价格平稳、回撤小
-        w10 = _bars(10, step="0.02")
-        tail = _bars(5, start_price=str(w10[-1].close), step="0.0001")
+        # 高位整理：后段 10 根价格平稳、回撤小（consolidation_seconds_min=10）
+        w10 = _bars(10, step="0.03")
+        tail = _bars(10, start_price=str(w10[-1].close), step="0.0001")
         wait = w10 + tail
         result = anti_chase_check(w10, wait, config)
         assert result.allowed is True
 
     def test_drawdown_block(self):
-        w10 = _bars(10, step="0.02")
-        # 等待期大幅回撤
-        tail = _bars(5, start_price=str(w10[-1].close), step="-0.02")
+        w10 = _bars(10, step="0.03")
+        # 等待期回撤 > 18%
+        tail = _bars(5, start_price=str(w10[-1].close), step="-0.05")
         wait = w10 + tail
         result = anti_chase_check(w10, wait, STRATEGY.solana.anti_chase)
         assert result.allowed is False

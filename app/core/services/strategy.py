@@ -11,7 +11,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Literal, Optional
 
 from app.core.models import canonical_json, utc_now_ms
-from app.core.services.discovery import decide_pool
+from app.core.services.discovery import decide_pool, passes_market_quality
 
 log = logging.getLogger(__name__)
 
@@ -406,7 +406,9 @@ class SignalPipeline:
     STAGES = (
         "seen",
         "trusted_quote_fail",
+        "trusted_quote_fail",
         "security_fail",
+        "market_quality_fail",
         "g3_incomplete",
         "score_below_setup",
         "anti_chase_block",
@@ -549,11 +551,14 @@ class SignalPipeline:
                 return
             detail_map = {d.address: d for d in details}
 
-            # 5. 逐池评分（含聪明钱）
+            # 5. 逐池评分（含聪明钱）；市场质量硬门禁先行（文档第 6.4 节）
             scored = []
             for addr, window in windows.items():
                 detail = detail_map.get(addr)
                 if detail is None or detail.reserve_in_usd is None:
+                    continue
+                if not passes_market_quality(detail, self.strategy.market_quality):
+                    self._bump("market_quality_fail")
                     continue
                 snapshot = self._build_snapshot(token, addr, window, detail, result)
                 snapshot.smart = await self._eval_smart_money(token, addr, detail, result)

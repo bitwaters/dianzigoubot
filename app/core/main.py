@@ -23,6 +23,7 @@ from app.core.clients.coingecko_ws import (
 from app.core.clients.goplus import GoPlusClient
 from app.core.config import (
     Settings,
+    StrategyFile,
     load_plugins_config,
     load_strategy_file,
     setup_logging,
@@ -52,7 +53,8 @@ async def main() -> None:
     await db.open()
     repo = Repository(db.conn)
 
-    # 1. 恢复：策略 ACTIVE 快照
+    # 1. 恢复：策略 ACTIVE 快照（文档第 6.1 节：运行只加载 SQLite 快照，
+    #    编辑 strategy.yaml 不热加载；生效需 /strategy activate）
     activation = StrategyActivationService(repo)
     active = await activation.current_active()
     if active is None:
@@ -60,7 +62,7 @@ async def main() -> None:
         await activation.activate(strategy, admin_id=settings.telegram_admin_id)
         active = await activation.current_active()
         log.info("基准策略已激活: %s", active["revision"])
-    strategy = load_strategy_file(settings.strategy_path)  # 运行以 DB ACTIVE 为准
+    strategy = StrategyFile.model_validate(json.loads(active["canonical"]))
     strategy_hash = active["strategy_hash"]
     strategy_revision = active["revision"]
     log.info("运行策略: %s (%s)", strategy_revision, strategy_hash[:8])

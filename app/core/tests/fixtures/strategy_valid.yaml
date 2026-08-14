@@ -1,10 +1,10 @@
 schema: 1
-revision: strategy-1
-parent_revision: null
-change_reason: "基准信号策略（v1，LOCAL_SMART 特征权重为 0，待 v2 启用）"
+revision: strategy-2
+parent_revision: strategy-1
+change_reason: "采纳实战参考参数：放宽防追高、调整门禁阈值、替换评分权重与特征值、SOL 模板补 GT 预筛；LOCAL_SMART 仍为 v1 禁用"
 solana:
   collection:
-    version: "v1"
+    version: solana-collection-3
     query_templates:
       - id: sol_m5_trending
         endpoint: megafilter
@@ -13,6 +13,7 @@ solana:
         pages: 1
         query:
           networks: solana
+          checks: good_gt_score
       - id: sol_m5_pcp
         endpoint: megafilter
         sort: m5_price_change_percentage_desc
@@ -20,6 +21,7 @@ solana:
         pages: 1
         query:
           networks: solana
+          checks: good_gt_score
       - id: sol_trending
         endpoint: trending_pools
         sort: endpoint_default
@@ -33,14 +35,14 @@ solana:
         poll_seconds: 180
         pages: 1
         query: {}
-    reserve_usd_floor: "25000"
-    tx_count_floor: 30
+    reserve_usd_floor: "8000"
+    tx_count_floor: 12
     tx_count_duration: 5m
     rest_concurrency_max: 4
     websocket:
       g1_max_subscriptions: 100
       g3_max_subscriptions: 100
-      top_pool_mapping_ttl_seconds: 300
+      top_pool_mapping_ttl_seconds: 30
       watch_seconds_max: 15
       focus_seconds_max: 15
       watch_messages_max: 15
@@ -52,19 +54,19 @@ solana:
   discovery_channels:
     hot:
       enabled: true
-      max_source_rank: 10
+      max_source_rank: 20
     anomaly:
       enabled: true
-      volume_acceleration_ratio_min: "2"
-      buy_sell_tx_ratio_min: "1.2"
-      price_change_5m_abs_pct_min: "5"
+      volume_acceleration_ratio_min: "1.60"
+      buy_sell_tx_ratio_min: "1.15"
+      price_change_5m_abs_pct_min: "6.00"
     new_pool:
       enabled: true
-      pool_age_seconds_max: 600
+      pool_age_seconds_max: 21600
   discovery:
-    candidate_ttl_seconds: 900
+    candidate_ttl_seconds: 600
     rest_refresh_seconds: 30
-    new_pool_min_age_seconds: 60
+    new_pool_min_age_seconds: 120
   market_quality:
     trusted_quote_assets:
       - symbol: WSOL
@@ -73,241 +75,241 @@ solana:
         address: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
       - symbol: USDT
         address: Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB
-    reserve_usd_min: "40000"
-    fdv_usd_max: "50000000"
-    fdv_liquidity_ratio_max: "300"
-    pool_age_seconds_min: 600
+    reserve_usd_min: "12000"
+    fdv_usd_max: "30000000"
+    fdv_liquidity_ratio_max: "200"
+    pool_age_seconds_min: 120
     pool_age_seconds_max: 2592000
-    volume_5m_usd_min: "5000"
+    volume_5m_usd_min: "3000"
     tx_count_5m_min: 20
-    buys_5m_min: 10
-    sells_5m_min: 5
-    independent_buyers_5m_min: 5
+    buys_5m_min: 12
+    sells_5m_min: 3
+    independent_buyers_5m_min: 10
     independent_sellers_5m_min: 3
-    buy_sell_tx_ratio_5m_min: "0.8"
+    buy_sell_tx_ratio_5m_min: "0.80"
   security:
     gt_score_min: 75
-    top10_holding_pct_max: "40"
-    developer_holding_pct_max: "10"
-    transfer_fee_bps_max: "50"
-    lp_locked_pct_min: "80"
+    top10_holding_pct_max: "50.00"
+    developer_holding_pct_max: "5.00"
+    transfer_fee_bps_max: "100"
+    lp_locked_pct_min: "70.00"
     allowed_pool_models:
       - LP_TOKEN_OR_BURN_VERIFIABLE
     closable_action: reject
     metadata_mutable_action: observe
     transfer_fee_upgradable_action: reject
-    default_state_upgradable_action: observe
+    default_state_upgradable_action: reject
     balance_mutable_action: reject
-    transfer_hook_action: observe
-    token2022_risks_action: observe
+    transfer_hook_action: reject
+    token2022_risks_action: reject
   scoring:
-    watch_score_min: "40"
-    setup_score_min: "60"
-    buy_score_min: "80"
+    watch_score_min: "55"
+    setup_score_min: "68"
+    buy_score_min: "78"
     dimensions:
       market_quality:
-        weight: "0.15"
+        weight: "0.18"
         features:
           reserve_usd:
-            bad: "40000"
-            good: "600000"
-            weight: "0.25"
+            bad: "12000"
+            good: "150000"
+            weight: "0.30"
             missing_action: REJECT
           volume_liquidity_ratio_5m:
             bad: "0.05"
-            good: "0.4"
-            weight: "0.2"
-            missing_action: CAP_SETUP
+            good: "1.00"
+            weight: "0.25"
+            missing_action: REJECT
           fdv_liquidity_ratio:
-            bad: "300"
-            good: "25"
-            weight: "0.2"
-            missing_action: CAP_SETUP
+            bad: "200"
+            good: "20"
+            weight: "0.20"
+            missing_action: ZERO_SCORE
           gt_score:
             bad: "75"
-            good: "95"
-            weight: "0.2"
+            good: "100"
+            weight: "0.15"
             missing_action: ZERO_SCORE
           gt_verified:
             bad: "0"
             good: "1"
-            weight: "0.15"
+            weight: "0.10"
             missing_action: ZERO_SCORE
       short_momentum:
-        weight: "0.2"
+        weight: "0.18"
         features:
           price_change_5s_pct:
-            bad: "0"
-            good: "8"
-            weight: "0.4"
+            bad: "-2"
+            good: "5"
+            weight: "0.30"
             missing_action: CAP_SETUP
           price_change_10s_pct:
             bad: "0"
             good: "12"
-            weight: "0.35"
+            weight: "0.40"
             missing_action: CAP_SETUP
           price_change_5m_pct:
             bad: "0"
-            good: "25"
-            weight: "0.25"
-            missing_action: REJECT
+            good: "100"
+            weight: "0.30"
+            missing_action: CAP_SETUP
       activity_acceleration:
-        weight: "0.15"
+        weight: "0.16"
         features:
           tx_count_5m:
             bad: "20"
-            good: "120"
+            good: "500"
             weight: "0.35"
             missing_action: REJECT
           volume_rate_ratio_m5_to_previous_10m:
-            bad: "1"
-            good: "3"
-            weight: "0.35"
+            bad: "1.00"
+            good: "3.00"
+            weight: "0.40"
             missing_action: ZERO_SCORE
           tx_rate_ratio_m5_to_previous_10m:
-            bad: "1"
-            good: "2.5"
-            weight: "0.3"
+            bad: "1.00"
+            good: "3.00"
+            weight: "0.25"
             missing_action: ZERO_SCORE
       trade_flow:
-        weight: "0.1"
+        weight: "0.14"
         features:
           buy_sell_tx_ratio_5m:
-            bad: "0.8"
-            good: "2"
-            weight: "0.5"
-            missing_action: REJECT
+            bad: "0.80"
+            good: "2.50"
+            weight: "0.55"
+            missing_action: CAP_SETUP
           net_buy_tx_pct_5m:
-            bad: "-10"
-            good: "40"
-            weight: "0.5"
-            missing_action: ZERO_SCORE
+            bad: "0"
+            good: "50"
+            weight: "0.45"
+            missing_action: CAP_SETUP
       participant_structure:
-        weight: "0.1"
+        weight: "0.10"
         features:
           independent_buyers_5m:
-            bad: "5"
-            good: "40"
-            weight: "0.35"
+            bad: "10"
+            good: "200"
+            weight: "0.55"
             missing_action: REJECT
           buyer_seller_ratio_5m:
-            bad: "1"
-            good: "3"
-            weight: "0.35"
+            bad: "1.00"
+            good: "3.00"
+            weight: "0.30"
             missing_action: ZERO_SCORE
           holder_count:
-            bad: "100"
-            good: "2000"
-            weight: "0.3"
+            bad: "0"
+            good: "300"
+            weight: "0.15"
             missing_action: ZERO_SCORE
       holding_distribution:
-        weight: "0.1"
+        weight: "0.10"
         features:
           top10_holding_pct:
-            bad: "40"
-            good: "15"
-            weight: "0.4"
-            missing_action: REJECT
+            bad: "50"
+            good: "20"
+            weight: "0.40"
+            missing_action: CAP_SETUP
           developer_or_creator_holding_pct:
-            bad: "10"
-            good: "2"
-            weight: "0.3"
-            missing_action: ZERO_SCORE
+            bad: "5"
+            good: "0"
+            weight: "0.30"
+            missing_action: CAP_SETUP
           lp_locked_pct:
-            bad: "80"
+            bad: "70"
             good: "100"
-            weight: "0.3"
+            weight: "0.30"
             missing_action: CAP_SETUP
       smart_money_flow:
-        weight: "0.1"
+        weight: "0.10"
         features:
           local_smart_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
-            good: "10"
+            good: "20"
             weight: "0"
             missing_action: ZERO_SCORE
           token_profitable_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
-            good: "8"
-            weight: "0.6"
+            good: "20"
+            weight: "0.60"
             missing_action: ZERO_SCORE
           active_smart_wallets_60s:
             bad: "0"
-            good: "5"
-            weight: "0.4"
+            good: "4"
+            weight: "0.40"
             missing_action: ZERO_SCORE
       microstructure:
-        weight: "0.1"
+        weight: "0.04"
         features:
           close_location_10s:
-            bad: "0.3"
-            good: "0.75"
-            weight: "0.4"
-            missing_action: ZERO_SCORE
+            bad: "0.40"
+            good: "0.85"
+            weight: "0.35"
+            missing_action: CAP_SETUP
           positive_1s_bar_ratio_10s:
-            bad: "0.4"
-            good: "0.7"
-            weight: "0.3"
-            missing_action: ZERO_SCORE
+            bad: "0.40"
+            good: "0.80"
+            weight: "0.35"
+            missing_action: CAP_SETUP
           volume_retention_ratio_10s:
-            bad: "0.5"
-            good: "1.5"
-            weight: "0.3"
+            bad: "0.50"
+            good: "1.20"
+            weight: "0.30"
             missing_action: ZERO_SCORE
   smart_money:
     top_traders_limit: 20
     recent_trade_window_seconds: 60
     trade_response_limit: 300
-    local_wallet_min_observed_tokens: 10
-    local_wallet_success_rate_min_pct: "60"
-    local_wallet_rug_rate_max_pct: "10"
-    success_horizon_seconds: 900
-    success_gain_pct_min: "20"
-    failure_drawdown_pct: "30"
+    local_wallet_min_observed_tokens: 5
+    local_wallet_success_rate_min_pct: "60.00"
+    local_wallet_rug_rate_max_pct: "20.00"
+    success_horizon_seconds: 3600
+    success_gain_pct_min: "30.00"
+    failure_drawdown_pct: "20.00"
     min_confirming_wallets: 2
-    sell_block_net_volume_pct_min: "5"
+    sell_block_net_volume_pct_min: "15.00"
   anti_chase:
-    vertical_rise_10s_wait_pct: "4"
-    vwap_10s_deviation_wait_pct: "2"
-    max_wait_seconds: 20
-    drawdown_from_10s_high_block_pct: "6"
-    observed_liquidity_drop_between_responses_block_pct: "20"
-    consolidation_seconds_min: 5
-    consolidation_range_pct_max: "1.5"
-    pullback_min_pct: "1"
-    pullback_max_pct: "8"
-    pullback_recovery_ratio_min: "0.5"
+    vertical_rise_10s_wait_pct: "25.00"
+    vwap_10s_deviation_wait_pct: "12.00"
+    max_wait_seconds: 30
+    drawdown_from_10s_high_block_pct: "18.00"
+    observed_liquidity_drop_between_responses_block_pct: "20.00"
+    consolidation_seconds_min: 10
+    consolidation_range_pct_max: "12.00"
+    pullback_min_pct: "5.00"
+    pullback_max_pct: "20.00"
+    pullback_recovery_ratio_min: "0.60"
   signals:
     validity_seconds: 60
-    setup_confirmation_seconds: 5
-    signal_rearm_below_setup_seconds: 300
+    setup_confirmation_seconds: 10
+    signal_rearm_below_setup_seconds: 60
     min_g3_final_1s_bars: 10
     g3_bar_final_delay_seconds: 2
-    max_g3_age_seconds: 5
-    max_rest_market_age_seconds: 30
-    max_participant_age_seconds: 600
+    max_g3_age_seconds: 2
+    max_rest_market_age_seconds: 12
+    max_participant_age_seconds: 900
   backtest_model:
-    base_slippage_bps: "30"
-    max_impact_bps: "200"
-    impact_coefficient: "0.5"
-    network_fee_native: "0.005"
-    min_fill_liquidity_usd: "20000"
-    fill_deviation_pct_max: "3"
+    base_slippage_bps: "80"
+    max_impact_bps: "500"
+    impact_coefficient: "1.00"
+    network_fee_native: "0.0005"
+    min_fill_liquidity_usd: "12000"
+    fill_deviation_pct_max: "3.00"
     fill_deadline_seconds: 300
     take_profit_legs:
       - leg_index: 1
-        trigger_profit_pct: "50"
-        sell_pct_of_initial: "50"
+        trigger_profit_pct: "30.00"
+        sell_pct_of_initial: "30.00"
       - leg_index: 2
-        trigger_profit_pct: "100"
-        sell_pct_of_initial: "50"
-    stop_loss_pct: "20"
-    trailing_stop_pct: "15"
-    trailing_activation_profit_pct: "40"
-    max_hold_seconds: 14400
+        trigger_profit_pct: "80.00"
+        sell_pct_of_initial: "30.00"
+    stop_loss_pct: "12.00"
+    trailing_stop_pct: "10.00"
+    trailing_activation_profit_pct: "30.00"
+    max_hold_seconds: 21600
 bsc:
   collection:
-    version: "v1"
+    version: bsc-collection-3
     query_templates:
       - id: bsc_m5_trending
         endpoint: megafilter
@@ -316,7 +318,7 @@ bsc:
         pages: 1
         query:
           networks: bsc
-          checks: no_honeypot
+          checks: "good_gt_score,no_honeypot"
           include_unknown_honeypot_tokens: false
       - id: bsc_m5_pcp
         endpoint: megafilter
@@ -325,7 +327,7 @@ bsc:
         pages: 1
         query:
           networks: bsc
-          checks: no_honeypot
+          checks: "good_gt_score,no_honeypot"
           include_unknown_honeypot_tokens: false
       - id: bsc_trending
         endpoint: trending_pools
@@ -340,14 +342,14 @@ bsc:
         poll_seconds: 180
         pages: 1
         query: {}
-    reserve_usd_floor: "25000"
-    tx_count_floor: 30
+    reserve_usd_floor: "12000"
+    tx_count_floor: 15
     tx_count_duration: 5m
     rest_concurrency_max: 4
     websocket:
       g1_max_subscriptions: 100
       g3_max_subscriptions: 100
-      top_pool_mapping_ttl_seconds: 300
+      top_pool_mapping_ttl_seconds: 30
       watch_seconds_max: 15
       focus_seconds_max: 15
       watch_messages_max: 15
@@ -359,19 +361,19 @@ bsc:
   discovery_channels:
     hot:
       enabled: true
-      max_source_rank: 10
+      max_source_rank: 20
     anomaly:
       enabled: true
-      volume_acceleration_ratio_min: "2"
-      buy_sell_tx_ratio_min: "1.2"
-      price_change_5m_abs_pct_min: "5"
+      volume_acceleration_ratio_min: "1.60"
+      buy_sell_tx_ratio_min: "1.15"
+      price_change_5m_abs_pct_min: "5.00"
     new_pool:
       enabled: true
-      pool_age_seconds_max: 600
+      pool_age_seconds_max: 21600
   discovery:
-    candidate_ttl_seconds: 900
+    candidate_ttl_seconds: 600
     rest_refresh_seconds: 30
-    new_pool_min_age_seconds: 60
+    new_pool_min_age_seconds: 180
   market_quality:
     trusted_quote_assets:
       - symbol: WBNB
@@ -382,238 +384,238 @@ bsc:
         address: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"
       - symbol: FDUSD
         address: "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409"
-    reserve_usd_min: "40000"
+    reserve_usd_min: "20000"
     fdv_usd_max: "50000000"
-    fdv_liquidity_ratio_max: "300"
-    pool_age_seconds_min: 600
+    fdv_liquidity_ratio_max: "150"
+    pool_age_seconds_min: 180
     pool_age_seconds_max: 2592000
     volume_5m_usd_min: "5000"
-    tx_count_5m_min: 20
-    buys_5m_min: 10
-    sells_5m_min: 5
-    independent_buyers_5m_min: 5
-    independent_sellers_5m_min: 3
-    buy_sell_tx_ratio_5m_min: "0.8"
+    tx_count_5m_min: 25
+    buys_5m_min: 15
+    sells_5m_min: 4
+    independent_buyers_5m_min: 12
+    independent_sellers_5m_min: 4
+    buy_sell_tx_ratio_5m_min: "0.80"
   security:
     gt_score_min: 75
-    top10_holding_pct_max: "40"
-    creator_owner_holding_pct_max: "10"
-    buy_tax_pct_max: "10"
-    sell_tax_pct_max: "10"
-    transfer_tax_pct_max: "10"
-    lp_locked_pct_min: "80"
+    top10_holding_pct_max: "45.00"
+    creator_owner_holding_pct_max: "3.00"
+    buy_tax_pct_max: "5.00"
+    sell_tax_pct_max: "5.00"
+    transfer_tax_pct_max: "2.00"
+    lp_locked_pct_min: "80.00"
     allowed_pool_models:
       - V2_LP_TOKEN
-    proxy_action: observe
+    proxy_action: reject
     mintable_action: reject
     transfer_pausable_action: reject
     blacklist_action: reject
     whitelist_action: observe
-    anti_whale_action: observe
-    trading_cooldown_action: observe
-    other_risks_action: observe
+    anti_whale_action: reject
+    trading_cooldown_action: reject
+    other_risks_action: reject
   scoring:
-    watch_score_min: "40"
-    setup_score_min: "60"
+    watch_score_min: "58"
+    setup_score_min: "70"
     buy_score_min: "80"
     dimensions:
       market_quality:
-        weight: "0.15"
+        weight: "0.18"
         features:
           reserve_usd:
-            bad: "40000"
-            good: "600000"
-            weight: "0.25"
+            bad: "20000"
+            good: "200000"
+            weight: "0.30"
             missing_action: REJECT
           volume_liquidity_ratio_5m:
             bad: "0.05"
-            good: "0.4"
-            weight: "0.2"
-            missing_action: CAP_SETUP
+            good: "1.00"
+            weight: "0.25"
+            missing_action: REJECT
           fdv_liquidity_ratio:
-            bad: "300"
-            good: "25"
-            weight: "0.2"
-            missing_action: CAP_SETUP
+            bad: "150"
+            good: "20"
+            weight: "0.20"
+            missing_action: ZERO_SCORE
           gt_score:
             bad: "75"
-            good: "95"
-            weight: "0.2"
+            good: "100"
+            weight: "0.15"
             missing_action: ZERO_SCORE
           gt_verified:
             bad: "0"
             good: "1"
-            weight: "0.15"
+            weight: "0.10"
             missing_action: ZERO_SCORE
       short_momentum:
-        weight: "0.2"
+        weight: "0.18"
         features:
           price_change_5s_pct:
-            bad: "0"
-            good: "8"
-            weight: "0.4"
+            bad: "-2"
+            good: "4"
+            weight: "0.30"
             missing_action: CAP_SETUP
           price_change_10s_pct:
             bad: "0"
-            good: "12"
-            weight: "0.35"
+            good: "10"
+            weight: "0.40"
             missing_action: CAP_SETUP
           price_change_5m_pct:
             bad: "0"
-            good: "25"
-            weight: "0.25"
-            missing_action: REJECT
+            good: "80"
+            weight: "0.30"
+            missing_action: CAP_SETUP
       activity_acceleration:
-        weight: "0.15"
+        weight: "0.16"
         features:
           tx_count_5m:
-            bad: "20"
-            good: "120"
+            bad: "25"
+            good: "600"
             weight: "0.35"
             missing_action: REJECT
           volume_rate_ratio_m5_to_previous_10m:
-            bad: "1"
-            good: "3"
-            weight: "0.35"
+            bad: "1.00"
+            good: "3.00"
+            weight: "0.40"
             missing_action: ZERO_SCORE
           tx_rate_ratio_m5_to_previous_10m:
-            bad: "1"
-            good: "2.5"
-            weight: "0.3"
+            bad: "1.00"
+            good: "3.00"
+            weight: "0.25"
             missing_action: ZERO_SCORE
       trade_flow:
-        weight: "0.1"
+        weight: "0.14"
         features:
           buy_sell_tx_ratio_5m:
-            bad: "0.8"
-            good: "2"
-            weight: "0.5"
-            missing_action: REJECT
+            bad: "0.80"
+            good: "2.30"
+            weight: "0.55"
+            missing_action: CAP_SETUP
           net_buy_tx_pct_5m:
-            bad: "-10"
-            good: "40"
-            weight: "0.5"
-            missing_action: ZERO_SCORE
+            bad: "0"
+            good: "45"
+            weight: "0.45"
+            missing_action: CAP_SETUP
       participant_structure:
-        weight: "0.1"
+        weight: "0.10"
         features:
           independent_buyers_5m:
-            bad: "5"
-            good: "40"
-            weight: "0.35"
+            bad: "12"
+            good: "250"
+            weight: "0.55"
             missing_action: REJECT
           buyer_seller_ratio_5m:
-            bad: "1"
-            good: "3"
-            weight: "0.35"
+            bad: "1.00"
+            good: "2.80"
+            weight: "0.30"
             missing_action: ZERO_SCORE
           holder_count:
-            bad: "100"
-            good: "2000"
-            weight: "0.3"
+            bad: "0"
+            good: "500"
+            weight: "0.15"
             missing_action: ZERO_SCORE
       holding_distribution:
-        weight: "0.1"
+        weight: "0.10"
         features:
           top10_holding_pct:
-            bad: "40"
-            good: "15"
-            weight: "0.4"
-            missing_action: REJECT
+            bad: "45"
+            good: "18"
+            weight: "0.40"
+            missing_action: CAP_SETUP
           developer_or_creator_holding_pct:
-            bad: "10"
-            good: "2"
-            weight: "0.3"
-            missing_action: ZERO_SCORE
+            bad: "3"
+            good: "0"
+            weight: "0.30"
+            missing_action: CAP_SETUP
           lp_locked_pct:
             bad: "80"
             good: "100"
-            weight: "0.3"
+            weight: "0.30"
             missing_action: CAP_SETUP
       smart_money_flow:
-        weight: "0.1"
+        weight: "0.10"
         features:
           local_smart_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
-            good: "10"
+            good: "20"
             weight: "0"
             missing_action: ZERO_SCORE
           token_profitable_net_buy_60s_as_pct_of_volume_5m:
             bad: "0"
-            good: "8"
-            weight: "0.6"
+            good: "20"
+            weight: "0.60"
             missing_action: ZERO_SCORE
           active_smart_wallets_60s:
             bad: "0"
-            good: "5"
-            weight: "0.4"
+            good: "4"
+            weight: "0.40"
             missing_action: ZERO_SCORE
       microstructure:
-        weight: "0.1"
+        weight: "0.04"
         features:
           close_location_10s:
-            bad: "0.3"
-            good: "0.75"
-            weight: "0.4"
-            missing_action: ZERO_SCORE
+            bad: "0.40"
+            good: "0.85"
+            weight: "0.35"
+            missing_action: CAP_SETUP
           positive_1s_bar_ratio_10s:
-            bad: "0.4"
-            good: "0.7"
-            weight: "0.3"
-            missing_action: ZERO_SCORE
+            bad: "0.40"
+            good: "0.80"
+            weight: "0.35"
+            missing_action: CAP_SETUP
           volume_retention_ratio_10s:
-            bad: "0.5"
-            good: "1.5"
-            weight: "0.3"
+            bad: "0.50"
+            good: "1.20"
+            weight: "0.30"
             missing_action: ZERO_SCORE
   smart_money:
     top_traders_limit: 20
     recent_trade_window_seconds: 60
     trade_response_limit: 300
-    local_wallet_min_observed_tokens: 10
-    local_wallet_success_rate_min_pct: "60"
-    local_wallet_rug_rate_max_pct: "10"
-    success_horizon_seconds: 900
-    success_gain_pct_min: "20"
-    failure_drawdown_pct: "30"
+    local_wallet_min_observed_tokens: 5
+    local_wallet_success_rate_min_pct: "60.00"
+    local_wallet_rug_rate_max_pct: "20.00"
+    success_horizon_seconds: 3600
+    success_gain_pct_min: "30.00"
+    failure_drawdown_pct: "20.00"
     min_confirming_wallets: 2
-    sell_block_net_volume_pct_min: "5"
+    sell_block_net_volume_pct_min: "15.00"
   anti_chase:
-    vertical_rise_10s_wait_pct: "4"
-    vwap_10s_deviation_wait_pct: "2"
-    max_wait_seconds: 20
-    drawdown_from_10s_high_block_pct: "6"
-    observed_liquidity_drop_between_responses_block_pct: "20"
-    consolidation_seconds_min: 5
-    consolidation_range_pct_max: "1.5"
-    pullback_min_pct: "1"
-    pullback_max_pct: "8"
-    pullback_recovery_ratio_min: "0.5"
+    vertical_rise_10s_wait_pct: "20.00"
+    vwap_10s_deviation_wait_pct: "10.00"
+    max_wait_seconds: 30
+    drawdown_from_10s_high_block_pct: "15.00"
+    observed_liquidity_drop_between_responses_block_pct: "15.00"
+    consolidation_seconds_min: 10
+    consolidation_range_pct_max: "10.00"
+    pullback_min_pct: "5.00"
+    pullback_max_pct: "20.00"
+    pullback_recovery_ratio_min: "0.60"
   signals:
     validity_seconds: 60
-    setup_confirmation_seconds: 5
-    signal_rearm_below_setup_seconds: 300
+    setup_confirmation_seconds: 10
+    signal_rearm_below_setup_seconds: 60
     min_g3_final_1s_bars: 10
     g3_bar_final_delay_seconds: 2
-    max_g3_age_seconds: 5
-    max_rest_market_age_seconds: 30
-    max_participant_age_seconds: 600
+    max_g3_age_seconds: 2
+    max_rest_market_age_seconds: 12
+    max_participant_age_seconds: 900
   backtest_model:
-    base_slippage_bps: "30"
-    max_impact_bps: "200"
-    impact_coefficient: "0.5"
-    network_fee_native: "0.005"
+    base_slippage_bps: "100"
+    max_impact_bps: "500"
+    impact_coefficient: "1.00"
+    network_fee_native: "0.0003"
     min_fill_liquidity_usd: "20000"
-    fill_deviation_pct_max: "3"
+    fill_deviation_pct_max: "3.00"
     fill_deadline_seconds: 300
     take_profit_legs:
       - leg_index: 1
-        trigger_profit_pct: "50"
-        sell_pct_of_initial: "50"
+        trigger_profit_pct: "25.00"
+        sell_pct_of_initial: "30.00"
       - leg_index: 2
-        trigger_profit_pct: "100"
-        sell_pct_of_initial: "50"
-    stop_loss_pct: "20"
-    trailing_stop_pct: "15"
-    trailing_activation_profit_pct: "40"
-    max_hold_seconds: 14400
+        trigger_profit_pct: "70.00"
+        sell_pct_of_initial: "30.00"
+    stop_loss_pct: "10.00"
+    trailing_stop_pct: "8.00"
+    trailing_activation_profit_pct: "25.00"
+    max_hold_seconds: 21600

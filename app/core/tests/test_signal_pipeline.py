@@ -45,10 +45,13 @@ def _pool(address: str, *, base="T1", quote="So111111111111111111111111111111111
 
 
 def _detail(address: str, reserve: str = "200000") -> PoolDetail:
+    import time
+
     return PoolDetail(
         address=address,
         reserve_in_usd=Decimal(reserve),
         fdv_usd=Decimal("5000000"),
+        pool_created_at_ms=int(time.time() * 1000) - 300_000,  # 池龄 5 分钟
         price_change_pct={"m5": Decimal("15")},
         transactions={
             "m5": TxBucket(buys=60, sells=30, buyers=45, sellers=25),
@@ -250,8 +253,8 @@ class TestSignalPipelineE2E:
             await asyncio.sleep(0.05)
         assert len(bus.published) == 1
         row = await repo.get_signal(bus.published[0])
-        # 屏障按 总分 > 流动性 > 成交量 > 地址：P1 reserve 低 → volume_liq 高 → 总分更高
-        assert row["pool_address"] == "P1"
+        # 屏障按 总分 > 流动性 > 成交量 > 地址：新权重下 reserve 主导 → P2 总分更高
+        assert row["pool_address"] == "P2"
         assert row["chain"] == "solana"
         # 信号推送到信号频道（chat_target = -100123）
         cursor = await repo.conn.execute(

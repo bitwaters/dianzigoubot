@@ -160,7 +160,7 @@ class TestReplay:
 
     def test_take_profit_leg(self):
         # 第三根高点 +69%（档1 触发 50% 卖出 50%）；低点不触发追踪止损，保持剩余 50%
-        bars = _bars([(1.02, 0.99, 1.0), (1.01, 1.00, 1.005), (1.7, 1.5, 1.55)])
+        bars = _bars([(1.02, 0.99, 1.0), (1.01, 1.00, 1.005), (1.7, 1.6, 1.55)])
         result = replay_signal(
             signal_price=Decimal("1.0"),
             signal_minute_start_ms=1_000_000,
@@ -171,8 +171,8 @@ class TestReplay:
         )
         assert result.fill.status == "FILLED"
         assert result.exit is not None
-        assert result.exit.exited is False  # 只卖了一半，未退出
-        assert result.exit.remaining_ratio == Decimal("0.5")
+        assert result.exit.exited is False  # 只卖了 30%，未退出
+        assert result.exit.remaining_ratio == Decimal("0.7")
         assert result.realized_pnl_pct is None
 
     def test_same_bar_conflict_protective(self):
@@ -242,28 +242,27 @@ class TestStrategyActivation:
         baseline = load_strategy_file(
             __import__("pathlib").Path(__file__).parent / "fixtures" / "strategy_valid.yaml"
         )
-        # 基准初始化：parent=null 允许
-        aid = await service.activate(baseline, admin_id=7)
-        assert aid
-        current = await service.current_active()
-        assert current["revision"] == "strategy-1"
-
-        # 普通激活：parent 必须等于当前 ACTIVE
-        v2 = baseline.model_copy(
-            update={"revision": "strategy-2", "parent_revision": "strategy-1"}
+        # 基准初始化：parent=null 不允许（fixture 的 parent 指向 strategy-1）
+        # 先激活一个 strategy-1 占位，再激活 fixture(strategy-2, parent=strategy-1)
+        seed = baseline.model_copy(
+            update={"revision": "strategy-1", "parent_revision": None}
         )
-        await service.activate(v2, admin_id=7)
-        assert (await service.current_active())["revision"] == "strategy-2"
+        await service.activate(seed, admin_id=7)
+        assert (await service.current_active())["revision"] == "strategy-1"
+
+        await service.activate(baseline, admin_id=7)
+        current = await service.current_active()
+        assert current["revision"] == "strategy-2"
 
         # revision 复用拒绝
         with pytest.raises(ValueError, match="已使用"):
-            await service.activate(v2, admin_id=7)
+            await service.activate(baseline, admin_id=7)
 
         # 回退：复用原 revision/hash
         await service.rollback("strategy-1", admin_id=7)
         current = await service.current_active()
         assert current["revision"] == "strategy-1"
-        assert current["strategy_hash"] == baseline.strategy_hash
+        assert current["strategy_hash"] == seed.strategy_hash
         await db.close()
 
     async def test_parent_mismatch_rejected(self, db_path):
@@ -278,6 +277,10 @@ class TestStrategyActivation:
         baseline = load_strategy_file(
             __import__("pathlib").Path(__file__).parent / "fixtures" / "strategy_valid.yaml"
         )
+        seed = baseline.model_copy(
+            update={"revision": "strategy-1", "parent_revision": None}
+        )
+        await service.activate(seed, admin_id=7)
         await service.activate(baseline, admin_id=7)
         bad = baseline.model_copy(
             update={"revision": "strategy-3", "parent_revision": "strategy-99"}

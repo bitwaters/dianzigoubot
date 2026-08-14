@@ -114,6 +114,44 @@ def passes_early_gate(pool: PoolAttributes, collection) -> bool:
     return True
 
 
+def passes_market_quality(detail: PoolDetail, mq) -> bool:
+    """市场质量硬门禁（文档第 6.4 节），第二份快照后对每个准入池执行。"""
+    if detail.reserve_in_usd is None or detail.reserve_in_usd < mq.reserve_usd_min:
+        return False
+    if detail.fdv_usd is not None and detail.fdv_usd > mq.fdv_usd_max:
+        return False
+    if (
+        detail.fdv_usd is not None
+        and detail.reserve_in_usd is not None
+        and detail.reserve_in_usd > 0
+        and detail.fdv_usd / detail.reserve_in_usd > mq.fdv_liquidity_ratio_max
+    ):
+        return False
+    if detail.pool_created_at_ms is None:
+        return False  # 池龄未知无法验证 → 不放行
+    age_seconds = (utc_now_ms() - detail.pool_created_at_ms) // 1000
+    if not (mq.pool_age_seconds_min <= age_seconds <= mq.pool_age_seconds_max):
+        return False
+    volume_5m = detail.volume_usd.get("m5")
+    if volume_5m is None or volume_5m < mq.volume_5m_usd_min:
+        return False
+    m5 = detail.transactions.get("m5")
+    if m5 is None:
+        return False
+    if m5.buys + m5.sells < mq.tx_count_5m_min:
+        return False
+    if m5.buys < mq.buys_5m_min or m5.sells < mq.sells_5m_min:
+        return False
+    if (
+        m5.buyers < mq.independent_buyers_5m_min
+        or m5.sellers < mq.independent_sellers_5m_min
+    ):
+        return False
+    if Decimal(m5.buys) / Decimal(max(m5.sells, 1)) < mq.buy_sell_tx_ratio_5m_min:
+        return False
+    return True
+
+
 def _volume_rate_ratio(pool: PoolAttributes) -> Decimal | None:
     m5 = pool.volume_usd.get("m5")
     m15 = pool.volume_usd.get("m15")

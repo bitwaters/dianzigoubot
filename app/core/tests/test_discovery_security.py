@@ -63,7 +63,7 @@ class TestClassifyPool:
         template = STRATEGY.solana.collection.query_templates[2]
         label = classify_pool(
             template=template,
-            rank=15,
+            rank=25,  # 新阈值 max_source_rank=20
             received_at_ms=10_000_000,
             pool=_pool(),
             channel=STRATEGY.solana.discovery_channels,
