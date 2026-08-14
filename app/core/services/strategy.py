@@ -584,9 +584,12 @@ class SignalPipeline:
             self._bump("security_fail")
             return
 
+        log.info("探针 %s %s: 安全通过 pools=%d", self.chain, token[:10], len(addresses))
+
         # 3. 并行 G3 FOCUS：全部准入池（每个精确池独立占订阅与计费）
         focus_ms = self.strategy.collection.websocket.focus_seconds_max * 1000
         subscribed = [a for a in addresses if self._ws.add_g3_pool(a, "base")]
+        log.info("探针 %s %s: 订阅成功 %d/%d", self.chain, token[:10], len(subscribed), len(addresses))
         try:
             windows: dict[str, list] = {}
             deadline = utc_now_ms() + focus_ms
@@ -598,6 +601,7 @@ class SignalPipeline:
                 await asyncio.sleep(0.25)
             if not windows:
                 self._bump("g3_incomplete")
+                log.info("探针 %s %s: 无完整窗口（订阅=%d）", self.chain, token[:10], len(subscribed))
                 return  # INCOMPLETE：全部池缺秒或不足 10 根
 
             # 4. 两份快照本地接收时间相隔至少 10 秒（文档第 4.4 节）
@@ -614,6 +618,8 @@ class SignalPipeline:
                 log.warning("第二份快照失败 %s: %s", token, exc)
                 return
             detail_map = {d.address: d for d in details}
+            log.info("探针 %s %s: 窗口=%d 快照返回=%d",
+                     self.chain, token[:10], len(windows), len(detail_map))
             if len(windows) > 0 and not detail_map:
                 log.info("诊断 %s %s: windows=%d 但第二份快照返回空",
                          self.chain, token[:10], len(windows))
@@ -649,6 +655,7 @@ class SignalPipeline:
             )
             if chosen is None:
                 self._bump("barrier_empty")
+                log.info("探针 %s %s: 屏障无可用池（scored=%d）", self.chain, token[:10], len(scored))
                 return
             entry = next(e for e in scored if e[0] == chosen)
             pool_address, window, detail, snapshot, scoring = entry
