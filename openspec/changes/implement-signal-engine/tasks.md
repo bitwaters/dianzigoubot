@@ -68,11 +68,11 @@
 
 ### 10. 回测与策略激活
 
-- [ ] 10.1 回测数据准备：决策快照/钱包观察/结果覆盖率检查、OHLCV 回补计划与管理员确认（`before_timestamp` UTC 秒分页）
-- [ ] 10.2 1m 成交模型纯函数实现（`NOT_FILLED/DATA_GAP`、synthetic 隔离、冲击公式）
-- [ ] 10.3 回测报告（文档第 10.5 节指标全集）与 run_id 确定性
-- [ ] 10.4 手动激活/回退：Schema 校验 → 报告 → 确认 → ACTIVE 快照切换；`validate-collection` dry-run
-- [ ] 10.5 基准 `strategy.yaml` 交付（双链完整值）
+- [x] 10.1 回测数据准备：决策快照/钱包观察/结果覆盖率检查、OHLCV 回补计划与管理员确认（`before_timestamp` UTC 秒分页）
+- [x] 10.2 1m 成交模型纯函数实现（`NOT_FILLED/DATA_GAP`、synthetic 隔离、冲击公式）
+- [x] 10.3 回测报告（文档第 10.5 节指标全集）与 run_id 确定性
+- [x] 10.4 手动激活/回退：Schema 校验 → 报告 → 确认 → ACTIVE 快照切换；`validate-collection` dry-run
+- [x] 10.5 基准 `strategy.yaml` 交付（双链完整值）
 
 ### 11. 故障恢复与第一阶段验收
 

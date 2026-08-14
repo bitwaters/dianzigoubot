@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -389,6 +390,213 @@ def evaluate_candidate(
 
     return CandidateDecision(new, reason="keep")
 
+
+# ---------------------------------------------------------------------------
+# 运行编排：候选 → G3 FOCUS → 评分 → 信号（strategy_task 核心，文档第 3.2 节）
+# ---------------------------------------------------------------------------
+
+
+class SignalPipeline:
+    """把 G4-G6 组件串成实时信号闭环（v1 编排，聚焦时长与轮数由策略配置）。"""
+
+    def __init__(
+        self,
+        *,
+        chain: str,
+        strategy,
+        repo,
+        cg,
+        gp,
+        ws,
+        candle_buffer,
+        pipeline,
+        bus,
+        admin,
+        admin_chat_id: int,
+        active_snapshot,
+    ) -> None:
+        self.chain = chain
+        self.strategy = strategy
+        self._repo = repo
+        self._cg = cg
+        self._gp = gp
+        self._ws = ws
+        self._candles = candle_buffer
+        self._pipeline = pipeline  # CandidatePipeline
+        self._bus = bus
+        self._admin = admin
+        self._admin_chat = admin_chat_id
+        self._active = active_snapshot  # (revision, hash)
+
+    async def handle_pool(self, pool, label) -> None:
+        """发现回调：深查 → 安全 → G3 FOCUS → 评分 → 信号。"""
+        if self._admin is not None and getattr(self._admin, "paused", False):
+            return
+        if not (pool.base_token_address and pool.address):
+            return
+        token = pool.base_token_address
+        candidate_pools = [pool.address]
+
+        result = await self._pipeline.deep_check(token, candidate_pools)
+        if result.errors.get("token_info"):
+            return
+        if result.security is None or not result.security.passed:
+            return
+
+        # G3 FOCUS（最长 focus_seconds_max，最多 focus_messages_max 条）
+        focus_ms = self.strategy.collection.websocket.focus_seconds_max * 1000
+        added = self._ws.add_g3_pool(pool.address, "base")
+        if not added:
+            return
+        deadline = utc_now_ms() + focus_ms
+        while utc_now_ms() < deadline:
+            window = self._candles.window(pool.address, "base", 10)
+            if window is not None:
+                break
+            await asyncio.sleep(0.25)
+        self._ws.remove_g3_pool(pool.address, "base")
+        window = self._candles.window(pool.address, "base", 10)
+        if window is None:
+            return  # INCOMPLETE：缺秒或不足 10 根
+
+        # 第二份聚合快照（与第一份本地接收时间相隔至少 10 秒）
+        try:
+            details = await self._cg.pools_multi(
+                self.chain, candidate_pools, include_volume_breakdown=True
+            )
+        except Exception as exc:
+            log.warning("第二份快照失败 %s: %s", token, exc)
+            return
+        detail = next((d for d in details if d.address == pool.address), None)
+        if detail is None or detail.reserve_in_usd is None:
+            return
+
+        snapshot = self._build_snapshot(token, pool.address, window, detail, result)
+        features = compute_features(snapshot)
+        scoring = score(features, self.strategy)
+        if scoring.rejected:
+            return
+        anti = anti_chase_check(window, window, self.strategy.anti_chase)
+        level = signal_level(scoring, self.strategy)
+        state = await self._load_state(token)
+        decision = evaluate_candidate(
+            state,
+            now_ms=utc_now_ms(),
+            total_score=scoring.total_score,
+            level=level,
+            anti_allowed=anti.allowed,
+            security_passed=True,
+            config=self.strategy,
+        )
+        await self._save_state(token, pool.address, decision.state)
+        if not decision.emit_signal:
+            return
+
+        # PRE_EXECUTION_CHECK（120 秒快照）
+        pre_exec = await self._pipeline._security_check(
+            token, result.token_info, result.holders, kind="PRE_EXECUTION_CHECK"
+        )
+        if pre_exec is None or not pre_exec.passed:
+            return
+        signal_id = await create_signal(
+            self._repo,
+            chain=self.chain,
+            token_address=token,
+            pool_address=pool.address,
+            signal_level_value="BUY",
+            scoring=scoring,
+            features=features,
+            reference_price=window[-1].close,
+            anti=anti,
+            security=result.security,
+            pre_execution=pre_exec,
+            smart=SmartMoneyEval(snapshot=snapshot.smart),
+            generation=decision.state.generation,
+            strategy_revision=self._active[0],
+            strategy_hash=self._active[1],
+            validity_seconds=self.strategy.signals.validity_seconds,
+            now_ms=utc_now_ms(),
+        )
+        await self._bus.publish_signal_created(signal_id)
+        # Telegram 买入信号（kind=BUY_SIGNAL 供过期标记使用）
+        row = await self._repo.get_signal(signal_id)
+        text = _signal_text(row)
+        await self._repo.insert_outbox(
+            delivery_key=f"sig:{signal_id}",
+            kind="BUY_SIGNAL",
+            parent_id=signal_id,
+            chat_target=str(self._admin_chat),
+            text=text,
+        )
+
+    def _build_snapshot(self, token, pool_address, window, detail, result) -> CandidateSnapshot:
+        from app.core.clients.coingecko import TxBucket as _TB
+
+        m5 = detail.transactions.get("m5")
+        m15 = detail.transactions.get("m15")
+        sec_fields = result.security.fields if result.security else {}
+        top10 = _field_decimal(sec_fields.get("top10_holding_pct"))
+        lp = _field_decimal(sec_fields.get("lp_locked_pct"))
+        return CandidateSnapshot(
+            chain=self.chain,
+            token_address=token,
+            pool_address=pool_address,
+            w5=window[-5:],
+            w10=window,
+            pool=PoolSnapshot(
+                reserve_usd=detail.reserve_in_usd,
+                fdv_usd=detail.fdv_usd,
+                volume_m5_usd=detail.volume_usd.get("m5"),
+                volume_m15_usd=detail.volume_usd.get("m15"),
+                tx_m5=_TB(buys=m5.buys, sells=m5.sells, buyers=m5.buyers, sellers=m5.sellers) if m5 else None,
+                tx_m15=_TB(buys=m15.buys, sells=m15.sells, buyers=m15.buyers, sellers=m15.sellers) if m15 else None,
+                price_change_5m_pct=detail.price_change_pct.get("m5"),
+            ),
+            gt_score=result.token_info.gt_score if result.token_info else None,
+            gt_verified=result.token_info.gt_verified if result.token_info else None,
+            holder_count=result.token_info.holder_count if result.token_info else None,
+            top10_holding_pct=top10,
+            developer_or_creator_holding_pct=None,
+            lp_locked_pct=lp,
+        )
+
+    async def _load_state(self, token: str) -> CandidateRuntime:
+        row = await self._repo.get_candidate(self.chain, token)
+        if row is None:
+            return CandidateRuntime()
+        return CandidateRuntime(
+            status=row["status"],
+            setup_started_at=row["setup_started_at"],
+            generation=int(row["signal_generation"]),
+            generation_signal_emitted=(row["status"] == "SIGNAL"),
+            below_setup_since=None,
+        )
+
+    async def _save_state(self, token: str, pool_address: str, state: CandidateRuntime) -> None:
+        await self._repo.upsert_candidate(
+            self.chain,
+            token,
+            pool_address,
+            status=state.status,
+            signal_generation=state.generation,
+            setup_started_at=state.setup_started_at,
+        )
+
+
+def _field_decimal(field) -> Optional[Decimal]:
+    if field is None:
+        return None
+    detail = getattr(field, "detail", None)
+    try:
+        return Decimal(str(detail)) if detail else None
+    except Exception:
+        return None
+
+
+def _signal_text(row) -> str:
+    from app.core.services.admin import build_signal_message
+
+    return build_signal_message(row)
 
 # ---------------------------------------------------------------------------
 # 10.6 策略激活与回退（手动决策）
