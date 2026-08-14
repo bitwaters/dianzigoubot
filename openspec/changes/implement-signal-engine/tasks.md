@@ -6,10 +6,10 @@
 
 ### 1. 项目骨架与配置
 
-- [ ] 1.1 建立 `app/core/` 目录骨架、依赖清单（httpx/websockets/python-telegram-bot/aiosqlite/pydantic/pytest）与 Dockerfile
-- [ ] 1.2 实现 `config.py`：环境变量加载（CoinGecko Key、Telegram Token/管理员 ID/频道 ID）、日志配置（凭证脱敏）
-- [ ] 1.3 实现 `config/strategy.yaml` Pydantic 严格 Schema（文档第 6 章全部字段；拒绝执行/风险/晋升字段）+ canonical JSON 与 `strategy_hash` 工具
-- [ ] 1.4 实现 `config/plugins.yaml` 解析（enabled 列表）
+- [x] 1.1 建立 `app/core/` 目录骨架、依赖清单（httpx/websockets/python-telegram-bot/aiosqlite/pydantic/pytest）与 Dockerfile
+- [x] 1.2 实现 `config.py`：环境变量加载（CoinGecko Key、Telegram Token/管理员 ID/频道 ID）、日志配置（凭证脱敏）
+- [x] 1.3 实现 `config/strategy.yaml` Pydantic 严格 Schema（文档第 6 章全部字段；拒绝执行/风险/晋升字段）+ canonical JSON 与 `strategy_hash` 工具
+- [x] 1.4 实现 `config/plugins.yaml` 解析（enabled 列表）
 
 ### 2. 存储层
 

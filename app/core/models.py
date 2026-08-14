@@ -6,9 +6,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from decimal import Decimal
 
 _ZERO = Decimal(0)
+
+
+def utc_now_ms() -> int:
+    """当前 UTC 毫秒时间戳（文档统一时间单位）。"""
+    return int(time.time() * 1000)
 
 
 def decimal_to_canonical(value: Decimal) -> str:
