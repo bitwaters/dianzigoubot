@@ -1,7 +1,7 @@
 schema: 1
-revision: strategy-4
-parent_revision: strategy-3
-change_reason: "top10 80、dev 15（meme 持仓集中度实测）"
+revision: strategy-5
+parent_revision: strategy-4
+change_reason: "top10 硬门禁关闭（中位数87%实测）、dev 20；集中度交由评分惩罚"
 solana:
   collection:
     version: solana-collection-3
@@ -89,8 +89,8 @@ solana:
     buy_sell_tx_ratio_5m_min: "0.80"
   security:
     gt_score_min: 40
-    top10_holding_pct_max: "80.00"
-    developer_holding_pct_max: "15.00"
+    top10_holding_pct_max: "100"
+    developer_holding_pct_max: "20.00"
     transfer_fee_bps_max: "100"
     lp_locked_pct_min: "70.00"
     allowed_pool_models:
@@ -398,8 +398,8 @@ bsc:
     buy_sell_tx_ratio_5m_min: "0.80"
   security:
     gt_score_min: 40
-    top10_holding_pct_max: "80.00"
-    creator_owner_holding_pct_max: "15.00"
+    top10_holding_pct_max: "100"
+    creator_owner_holding_pct_max: "20.00"
     buy_tax_pct_max: "5.00"
     sell_tax_pct_max: "5.00"
     transfer_tax_pct_max: "2.00"

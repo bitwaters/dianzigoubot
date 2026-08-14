@@ -299,7 +299,7 @@ class TestCoreActions:
         assert core.confirm_payload("/status", "") is None
 
         status = await core.strategy_command("status")
-        assert "strategy-4" in status
+        assert "strategy-5" in status
         usage = await core.strategy_command("backtest")
         assert "历史信号" in usage
         await db.close()
