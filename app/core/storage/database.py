@@ -47,7 +47,10 @@ class Database:
 
     async def open(self) -> "Database":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(self.path)
+        # isolation_level=None：自动提交模式。Repository 直写立即落盘，
+        # 避免隐式事务悬挂导致锁库与外部读不可见；PriorityWriter 的
+        # 显式 BEGIN/COMMIT 批处理在自动提交模式下仍然有效。
+        self._conn = await aiosqlite.connect(self.path, isolation_level=None)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode = WAL")
         await self._conn.execute("PRAGMA foreign_keys = ON")
